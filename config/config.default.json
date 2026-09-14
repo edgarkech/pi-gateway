@@ -1,0 +1,75 @@
+{
+	"port": 3847,
+	"host": "localhost",
+	"tokens": [],
+	"corsOrigins": ["*"],
+	"enableWebSocket": true,
+	"enableHttp": true,
+	"security": {
+		"allowAll": true,
+		"requirePairing": false,
+		"allowedUids": {},
+		"adminUids": {},
+		"rateLimit": {
+			"maxRequests": 60,
+			"windowMs": 60000
+		}
+	},
+	"sessions": {
+		"resetPolicy": "idle",
+		"dailyHour": 4,
+		"idleMinutes": 1440
+	},
+	"media": {
+		"enabled": true,
+		"rootDir": "~/.pi/runtime/media",
+		"maxFileSizeBytes": 20480000,
+		"maxImageBytes": 5242880,
+		"maxTotalBytes": 536870912,
+		"retentionHours": 24,
+		"sweepIntervalMinutes": 30,
+		"maxAttachmentsPerMessage": 4,
+		"allowedKinds": ["image", "document", "audio", "video"],
+		"allowedMimeTypes": []
+	},
+	"platforms": {
+		"discord": {
+			"enabled": false,
+			"botToken": "",
+			"guildId": ""
+		},
+		"telegram": {
+			"enabled": false,
+			"token": "",
+			"webhookUrl": ""
+		},
+		"slack": {
+			"enabled": false,
+			"webhookUrl": "",
+			"botToken": ""
+		},
+		"whatsapp": {
+			"enabled": false,
+			"sessionPath": "~/.pi/whatsapp-session",
+			"printQr": true
+		},
+		"nextcloudTalk": {
+			"enabled": false,
+			"baseUrl": "",
+			"userId": "",
+			"appToken": "",
+			"rooms": [],
+			"pollMode": "long-poll",
+			"longPollTimeoutSeconds": 30,
+			"intervalMs": 5000,
+			"minPollIntervalMs": 1000,
+			"backoffMaxMs": 60000,
+			"maxConcurrentPolls": 4,
+			"circuitThreshold": 5,
+			"autoDiscoverRooms": false,
+			"roomRefreshIntervalMs": 60000,
+			"allowInsecureHttp": false,
+			"maxAttachmentsPerMessage": 4
+		}
+	}
+}

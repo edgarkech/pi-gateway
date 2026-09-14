@@ -1,0 +1,17 @@
+[Unit]
+Description=Pi-Gateway Daemon
+After=network.target
+
+[Service]
+Type=forking
+# Adjust to your Node.js >= 20 toolchain (e.g. ~/.local/share/pi-node/node-<ver>-linux-x64/bin/node)
+ExecStart=node %h/.pi/runtime/pi-gateway/dist/cli.js start
+PIDFile=%h/.pi/gateway/gateway.pid
+Restart=always
+RestartSec=5
+WorkingDirectory=%h/.pi/runtime/pi-gateway
+# Make sure the directory containing `node` is on the PATH
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=default.target

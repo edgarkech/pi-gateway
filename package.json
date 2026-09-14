@@ -1,0 +1,85 @@
+{
+	"name": "@edgarkech/pi-gateway",
+	"version": "1.0.0",
+	"description": "Multi-platform chat bridge for pi — connect your AI agent to Telegram, Discord, Slack, and more. Real-time streaming, per-chat sessions, and role-based access control.",
+	"author": "gamalan <original>; forked by edgarkech",
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"gateway",
+		"messaging",
+		"hermes",
+		"multi-platform"
+	],
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": [
+		"dist/",
+		"src/",
+		"config/",
+		"README.md"
+	],
+	"bin": {
+		"pi-gateway": "./dist/cli.js"
+	},
+	"scripts": {
+		"build": "tsc",
+		"dev": "tsc --watch",
+		"format": "prettier --write .",
+		"format:check": "prettier --check .",
+		"lint": "eslint .",
+		"lint:fix": "eslint . --fix",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"test:smoke": "npx tsx tests/index.ts",
+		"demo": "npx tsx tests/demo-server.ts",
+		"client": "npx tsx tests/client-demo.ts",
+		"prepublishOnly": "rm -rf dist && tsc"
+	},
+	"dependencies": {
+		"@whiskeysockets/baileys": "^7.0.0-rc13",
+		"better-sqlite3": "^12.11.1",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@eslint/js": "^10.0.1",
+		"@types/better-sqlite3": "^7.6.0",
+		"@types/node": "^20.19.37",
+		"@types/ws": "^8.18.1",
+		"@typescript-eslint/eslint-plugin": "^8.67.0",
+		"@typescript-eslint/parser": "^8.67.0",
+		"@vitest/coverage-v8": "^4.1.11",
+		"eslint": "^10.8.1",
+		"eslint-config-prettier": "^10.1.8",
+		"prettier": "^3.9.6",
+		"tsx": "^4.19.0",
+		"typescript": "^6.0.2",
+		"typescript-eslint": "^8.67.0",
+		"vitest": "^4.1.11"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": ">=0.80.3",
+		"@sinclair/typebox": ">=0.32.0"
+	},
+	"pi": {
+		"extensions": [
+			"./dist/index.js"
+		]
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/edgarkech/pi-gateway.git"
+	}
+}

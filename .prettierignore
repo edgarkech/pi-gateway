@@ -1,0 +1,11 @@
+node_modules
+dist
+package-lock.json
+bun.lock
+*.md
+output
+analysis_report.md
+refactor_plan_phase_1.md
+refactor_progress.md
+ROADMAP.md
+README.md
