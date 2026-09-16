@@ -13,9 +13,9 @@ pi-gateway connects chat platforms (Discord, Telegram, Slack, WhatsApp, Nextclou
  Discord ─┐             │                pi-gateway                  │
  Telegram ─┤             │                                            │
  Slack ────┼── inbound ─►│  adapters → media → security → sessions    │── prompts ─►  pi agent
- WhatsApp ─┤             │                                            │◄─ (RPC, one
- NC Talk ──┘             │  ◄── outbound: stream/edit/chunk/reply ──  │    process per
- Web/WS ────────────────►│  HTTP + WebSocket API, daemon mode         │    session)
+ WhatsApp ─┤             │                                            │◄─ (RPC, single
+ NC Talk ──┘             │  ◄── outbound: stream/edit/chunk/reply ──  │    process,
+ Web/WS ────────────────►│  HTTP + WebSocket API, daemon mode         │    sessionId-multiplexed)
                         └────────────────────────────────────────────┘
 ```
 
@@ -26,7 +26,9 @@ Two cooperating layers:
 - **In-process (extension):** when pi loads the extension, the gateway server (HTTP + WS) runs inside the pi process. Messages from chats arrive here when the gateway runs attached.
 - **Detached (daemon):** `/gateway start -d` (or `pi-gateway start -d` from the CLI) spawns a detached daemon process so the gateway keeps serving chats after pi closes. pi's footer synchronizes with daemon state via `status-footer.ts`.
 
-**One RPC process per session.** Each chat session maps to its own pi RPC child process (`Map<sessionId, SessionRuntime>` in `src/core/rpc.ts`). This gives true parallelism between chats, process-isolated correlation of completions (no FIFO ambiguity), and fault isolation — a hung channel process does not block others. Idle teardown and abort kill the per-session process; the sessions store treats the next message as a fresh session.
+**One RPC process, sessionId-multiplexed.** All chat sessions share a single pi RPC child process (`runtime.rpcProcess` in `src/core/rpc.ts`). Prompts are tagged with the gateway `sessionId`; streaming deltas (`message_update`) and completions (`agent_end`) are correlated through `Map<sessionId, PendingCompletion>` — the sessionId, not array position, resolves each completion (no FIFO ambiguity). Agent turns are processed by that single process (serial turn queue): a long-running turn delays other channels, and there is no per-channel process isolation. Idle teardown and abort kill and respawn the shared process; the sessions store treats the next message as a fresh session.
+
+> **Trade-off note:** the LLM backend is the real bottleneck, not the process architecture — with a local model, concurrent agent turns compete for LLM slots (shared context window / hardware resources). This is the documented motivation for the configurable gateway model/persona (see `rpc-persona.md`).
 
 > Design rationale and migration history: [`adr-rpc-session-management.md`](adr-rpc-session-management.md).
 
@@ -35,7 +37,7 @@ Two cooperating layers:
 | Module | Responsibility |
 |---|---|
 | `server.ts` | HTTP + WebSocket server, API auth (Bearer tokens), cron-ish housekeeping |
-| `rpc.ts` | Spawns/one pi RPC process per session; multiplexes prompts, streaming deltas (`message_update`) and completions (`agent_end`) by `sessionId`; per-session abort/restart |
+| `rpc.ts` | Spawns the single pi RPC process; multiplexes prompts, streaming deltas (`message_update`) and completions (`agent_end`) by `sessionId`; abort/restart of the shared process |
 | `message-pipeline.ts` | The inbound path (see §5): media ingest → rate limit → allowlist/pairing → tool-policy directive → session resolution → RPC prompt |
 | `commands.ts` | The `/gateway` slash-command handler (status, allow, pair, admin, tool-policy, sessions, tasks, config) |
 | `tools.ts` | The 5 registered tools: `gateway_status`, `gateway_sessions`, `gateway_background_tasks`, `gateway_pairing`, `gateway_tool_policy` |
@@ -76,7 +78,7 @@ adapter.onMessage
   → rate limiting (per user + per platform, sliding window)
   → allowlist / pairing (DB allowlist, config pre-approved UIDs, pairing codes)
   → tool-policy directive (read-only baseline, prepended to the prompt)
-  → session resolution (getOrCreateSession → 1 session = 1 RPC process)
+  → session resolution (getOrCreateSession → sessionId-tagged RPC prompt)
   → RPC prompt (sessionId-tagged)
 ```
 
@@ -106,7 +108,7 @@ Enforcement order on every inbound message: **rate limiting → allowlist → to
 
 ## 9. Runtime state (`src/state.ts`)
 
-All mutable shared state lives on a single **`runtime` container** (singleton) — config, adapters, RPC process registry, media manager, server handles. No scattered module-level globals; modules read cross-module bindings inside function bodies (deferred ESM cycles only).
+All mutable shared state lives on a single **`runtime` container** (singleton) — config, adapters, the RPC process handle, media manager, server handles. No scattered module-level globals; modules read cross-module bindings inside function bodies (deferred ESM cycles only).
 
 ## 10. Storage layout
 
@@ -126,5 +128,5 @@ All mutable shared state lives on a single **`runtime` container** (singleton) �
 ## 12. Technology & constraints
 
 - **Node.js ≥ 20**, TypeScript (strict), ESM; `better-sqlite3` for stores; `@sinclair/typebox` for schema validation.
-- Runs inside the pi extension host; RPC to the pi agent per session process (see §2).
+- Runs inside the pi extension host; RPC to the single pi agent process (see §2).
 - The gateway never logs secrets; platform credentials are scope-limited app passwords/bot tokens where the platform supports it.

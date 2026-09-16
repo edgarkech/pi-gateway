@@ -1,11 +1,12 @@
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptions } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { logger } from "../logger.js";
 import { getPackageRoot } from "../paths.js";
 import { runtime, type RpcProcess } from "../state.js";
 import type { ImageContent } from "../media/types.js";
+import type { RpcConfig } from "../types.js";
 import {
 	setStdinWriter,
 	setActiveChannel,
@@ -82,6 +83,31 @@ function resolveCompletionForEvent(sessionId?: string): PendingCompletion | unde
 }
 
 // RPC to pi agent
+
+/**
+ * rpc-persona (docs/rpc-persona.md §4): compose the pi spawn args and options
+ * from the optional rpc config block. Empty fields keep today's behavior
+ * (no --model/--system-prompt flag, no cwd option) — backward compatible.
+ * Exported for unit testing (docs/rpc-persona.md §5.1).
+ */
+export function buildRpcSpawnArgs(
+	extensionPath: string,
+	rpcConfig?: RpcConfig,
+): { args: string[]; spawnOptions: SpawnOptions } {
+	const args = ["--mode", "rpc", "--extension", extensionPath];
+	if (rpcConfig?.model) args.push("--model", rpcConfig.model);
+	if (rpcConfig?.systemPrompt) args.push("--system-prompt", rpcConfig.systemPrompt);
+	const spawnOptions: SpawnOptions = {
+		stdio: ["pipe", "pipe", "pipe"],
+		env: {
+			...process.env,
+			OLLAMA_HOST: process.env.OLLAMA_HOST || "localhost:11434",
+		},
+	};
+	if (rpcConfig?.cwd) spawnOptions.cwd = rpcConfig.cwd;
+	return { args, spawnOptions };
+}
+
 function startRpc(): RpcProcess {
 	const extensionPath = join(
 		getPackageRoot(import.meta.url),
@@ -89,15 +115,13 @@ function startRpc(): RpcProcess {
 		"extensions",
 		"pi-gateway-ask-user-rpc.js",
 	);
+	// rpc-persona (docs/rpc-persona.md): model/system-prompt flags and the cwd
+	// spawn option come from the optional rpc config block; empty fields keep
+	// today's behavior (backward compatible).
+	const { args, spawnOptions } = buildRpcSpawnArgs(extensionPath, runtime.config.rpc);
 	// stdio is fully piped => typed as ChildProcessByStdio via the cast below,
 	// which guarantees writable stdin and readable stdout/stderr (no nulls).
-	const proc = spawn("pi", ["--mode", "rpc", "--extension", extensionPath], {
-		stdio: ["pipe", "pipe", "pipe"],
-		env: {
-			...process.env,
-			OLLAMA_HOST: process.env.OLLAMA_HOST || "localhost:11434",
-		},
-	}) as RpcProcess;
+	const proc = spawn("pi", args, spawnOptions) as RpcProcess;
 
 	// Give the interactive bridge a way to write to pi's stdin
 	setStdinWriter((line: string) => {

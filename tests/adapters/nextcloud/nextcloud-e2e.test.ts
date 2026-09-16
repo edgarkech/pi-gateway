@@ -281,7 +281,10 @@ describe.runIf(creds !== null)("S7 E2E: Nextcloud Talk Adapter gegen reale Insta
 
 			// … aber es gibt KEINEN Agent-Call für sie (Anti-Loop, D4).
 			const ownCalls = trackerB.calls.filter((m) => m.userId === c.userId);
-			expect(ownCalls, `Eigene Nachrichten triggerten Agent-Calls: ${JSON.stringify(ownCalls.map((m) => m.content))}`).toHaveLength(0);
+			expect(
+				ownCalls,
+				`Eigene Nachrichten triggerten Agent-Calls: ${JSON.stringify(ownCalls.map((m) => m.content))}`,
+			).toHaveLength(0);
 
 			await adapterB.stop();
 		},
@@ -294,7 +297,12 @@ describe.runIf(creds !== null)("S7 E2E: Nextcloud Talk Adapter gegen reale Insta
 		"S5 Restart: Wasserstand überlebt Stop+Start — kein Re-Processing, kein Double-Send, Adapter bleibt danach funktionsfähig",
 		async () => {
 			const trackerC = new AgentCallTracker();
-			const adapterC = await startAdapter(SYNTHETIC_SELF_FILTER_USER, "state-s5", trackerC, true);
+			const adapterC = await startAdapter(
+				SYNTHETIC_SELF_FILTER_USER,
+				"state-s5",
+				trackerC,
+				true,
+			);
 
 			// Phase 1: Trigger + Antwort verarbeiten lassen.
 			const t1 = `E2E-${RUN_ID} S5 t1`;
@@ -317,11 +325,19 @@ describe.runIf(creds !== null)("S7 E2E: Nextcloud Talk Adapter gegen reale Insta
 			// Phase 2: Restart (gleiche State-Dir → SQLite-Wasserstand persistiert).
 			await adapterC.stop(); // schließt die talk_state-DB
 			const trackerD = new AgentCallTracker();
-			const adapterD = await startAdapter(SYNTHETIC_SELF_FILTER_USER, "state-s5", trackerD, false);
+			const adapterD = await startAdapter(
+				SYNTHETIC_SELF_FILTER_USER,
+				"state-s5",
+				trackerD,
+				false,
+			);
 
 			// Kein Re-Processing: nach einem Poll-Zyklus keine Calls für t1/r1.
 			await new Promise((r) => setTimeout(r, 4_000));
-			expect(trackerD.countCallsWithMarker(`E2E-${RUN_ID} S5`), "Re-Processing nach Restart").toBe(0);
+			expect(
+				trackerD.countCallsWithMarker(`E2E-${RUN_ID} S5`),
+				"Re-Processing nach Restart",
+			).toBe(0);
 
 			// Adapter bleibt funktionsfähig: neue Nachricht → genau ein Call.
 			const t2 = `E2E-${RUN_ID} S5 t2`;

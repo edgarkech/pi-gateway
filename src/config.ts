@@ -27,6 +27,13 @@ const DEFAULT_CONFIG: GatewayConfig = {
 		idleMinutes: 1440,
 	},
 	promptTimeoutMs: 300000, // 5 minutes — override to increase for slow models
+	// rpc-persona (docs/rpc-persona.md §3): empty strings keep today's
+	// behavior (no flag / no cwd option) — backward compatible.
+	rpc: {
+		model: "",
+		systemPrompt: "",
+		cwd: "",
+	},
 	media: {
 		enabled: true,
 		rootDir: "~/.pi/runtime/media",
@@ -124,10 +131,27 @@ function mergeGatewayConfig(value: unknown): GatewayConfig {
 		} as GatewayConfig["platforms"]["nextcloudTalk"];
 	}
 
+	// rpc-persona (docs/rpc-persona.md §3): deep-merge the optional rpc block —
+	// a partial user block must not lose the empty defaults. `null` removes
+	// the block entirely (same convention as media).
+	const parsedRpc = parsed.rpc;
+	if (
+		parsedRpc !== undefined &&
+		parsedRpc !== null &&
+		(typeof parsedRpc !== "object" || Array.isArray(parsedRpc))
+	) {
+		throw new Error("config.rpc must be an object");
+	}
+	const rpcBlock =
+		parsedRpc === null
+			? undefined
+			: ({ ...DEFAULT_CONFIG.rpc, ...(parsedRpc ?? {}) } as GatewayConfig["rpc"]);
+
 	const merged = {
 		...DEFAULT_CONFIG,
 		...parsed,
 		...healthConfig,
+		rpc: rpcBlock,
 		security: {
 			...DEFAULT_CONFIG.security,
 			...security,
@@ -218,6 +242,17 @@ function mergeGatewayConfig(value: unknown): GatewayConfig {
 						`config.media.allowedMimeTypes contains invalid MIME type '${String(mt)}'`,
 					);
 				}
+			}
+		}
+	}
+
+	// rpc-persona (docs/rpc-persona.md §3): validate the optional rpc block —
+	// strings only; empty strings keep today's behavior.
+	if (merged.rpc !== undefined) {
+		for (const key of ["model", "systemPrompt", "cwd"] as const) {
+			const v = (merged.rpc as Record<string, unknown>)[key];
+			if (v !== undefined && typeof v !== "string") {
+				throw new Error(`config.rpc.${key} must be a string`);
 			}
 		}
 	}

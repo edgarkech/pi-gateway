@@ -105,6 +105,24 @@ export interface NextcloudTalkPlatformConfig {
 	// Media (Default: inherits media.maxAttachmentsPerMessage, §10)
 	maxAttachmentsPerMessage?: number;
 }
+
+/**
+ * rpc-persona (docs/rpc-persona.md §3) — configuration for the spawned pi
+ * RPC child process. All fields optional; empty strings keep today's
+ * behavior (no flag / no cwd option), so the change is backward compatible.
+ */
+export interface RpcConfig {
+	/** Startup model pattern for the RPC agent (e.g. a provider/model id).
+	 *  Empty = Settings-Kaskade (today's behavior). */
+	model?: string;
+	/** System prompt for the RPC agent — inline text or path to a prompt file.
+	 *  Replaces the coding-assistant default entirely (Replace, not Append);
+	 *  empty = default behavior. */
+	systemPrompt?: string;
+	/** Working directory of the RPC child process. The session store slot
+	 *  follows the CWD; empty = inherit the daemon CWD (today's behavior). */
+	cwd?: string;
+}
 // Types
 export interface GatewayConfig {
 	port: number;
@@ -125,6 +143,9 @@ export interface GatewayConfig {
 	};
 	/** Timeout in ms for waiting on pi agent to respond (default: 300000 = 5 min) */
 	promptTimeoutMs?: number;
+	/** rpc-persona: model/system-prompt/CWD of the spawned pi agent
+	 *  (docs/rpc-persona.md). Optional; empty values keep today's behavior. */
+	rpc?: RpcConfig;
 	sessions: {
 		resetPolicy: "daily" | "idle" | "both";
 		dailyHour: number;

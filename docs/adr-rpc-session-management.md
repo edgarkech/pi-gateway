@@ -1,7 +1,7 @@
 # ADR: RPC Session Management — von FIFO-Array zu Map-basiertem Multiplexing per `sessionId`
 
-- **Status:** Proposed
-- **Datum:** 2026-08-19
+- **Status:** Adopted als Variante — umgesetzt wurde **Option B** (ein Prozess, `sessionId`-multiplexed Map), nicht Option C (Nachtrag 2026-09-16)
+- **Datum:** 2026-08-19 · **Nachtrag:** 2026-09-16
 - **Entscheidung:** Ja (empfohlen) — Design-Entscheidung, kein Feature-Flag
 - **Betroffene Komponenten:** `src/core/rpc.ts`, `src/core/interactive.ts`, `src/adapters/*`, `src/types.ts`, `src/server.ts`, `src/sessions/store.ts`
 - **Voraussetzung (Upstream):** Pi RPC Protocol v? — benötigt optionale `sessionId`-Echos in Events (siehe §1.5)
@@ -325,3 +325,15 @@ aktiven Kanal). Ziel ist, alle Aufrufer auf `sessionId` umzustellen (→ §4).
 - Ist-Code: `src/sessions/store.ts` (`getOrCreateSession`, `generateSessionId`, `touchSession`).
 - Ist-Code: `src/state.ts` (`runtime.rpcProcess`), `src/server.ts` (Singleton `startRpc()`).
 - Pi RPC Protocol (offiziell): https://pi.dev/docs/latest/rpc — Events/`message_update`/`agent_end`, `bash_execution_update`-Echo-Präzedenzfall.
+
+---
+
+## Nachtrag (2026-09-16) — umgesetzte Variante: Option B
+
+Der ADR empfahl Option C (Hybrid). Umgesetzt wurde **Option B** — ein pi-RPC-Prozess mit Multiplexing:
+
+- `sendPromptRpc(message, sessionId, …)` taggt jeden Prompt mit der Gateway-`sessionId`; Completions (`agent_end`) und Streaming-Deltas (`message_update`) werden über `Map<sessionId, PendingCompletion>` (Fallback: laufender Stream) aufgelöst — keine FIFO-Annahme mehr.
+- Das FIFO-Array `pendingCompletions[]` und das `activeChannel`-Singleton sind entfallen; `pendingRequests[]` (ACK-Korrelation via `id`) bleibt unverändert.
+- Die pro-Session-Prozess-Isolation (Basis von Option A/C) wurde **bewusst nicht umgesetzt**: Agent-Turns bleiben in der seriellen Queue des einen Prozesses. Ein lang laufender Turn kann andere Kanäle verzögern; Fault-Isolation auf Prozess-Ebene existiert nicht.
+- **Ressourcen-Bewertung (betreiber-klargestellt 2026-09-16):** Der Engpass ist das LLM-Backend, nicht die Prozess-Architektur — bei einem lokalen Modell konkurrieren parallele Turns um LLM-Slots (geteiltes Kontextfenster / Hardware-Ressourcen). Mehrere pi-Prozesse würden daran nichts ändern. Der Lösungshebel für die Performance ist das konfigurierbare Gateway-Modell (`rpc-persona.md`).
+- `docs/ARCHITECTURE.md` (§1/§2/§3/§5/§9/§12) wurde 2026-09-16 auf diesen Stand korrigiert.

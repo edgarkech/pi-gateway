@@ -20,6 +20,11 @@
 		"dailyHour": 4,
 		"idleMinutes": 1440
 	},
+	"rpc": {
+		"model": "",
+		"systemPrompt": "",
+		"cwd": ""
+	},
 	"media": {
 		"enabled": true,
 		"rootDir": "~/.pi/runtime/media",
