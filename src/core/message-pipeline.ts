@@ -1,6 +1,6 @@
 import { logger } from "../logger.js";
 import { runtime } from "../state.js";
-import { getOrCreateSession, deleteSession } from "../sessions/store.js";
+import { getOrCreateSession, deleteSession, setPiSessionFile } from "../sessions/store.js";
 import {
 	isUserAllowed,
 	isAdmin,
@@ -25,7 +25,10 @@ import {
 	isAgentRunning,
 	peekActiveCompletion,
 	resetActiveStream,
+	newPiSession,
+	switchPiSession,
 } from "./rpc.js";
+import { enqueuePromptTask } from "./prompt-queue.js";
 import { updateStatus } from "./status-footer.js";
 import { isDaemonMode } from "./daemon.js";
 import {
@@ -362,41 +365,82 @@ const adapterCallbacks: AdapterCallbacks = {
 				}, 4000);
 			}
 
-			// Track which channel triggered this prompt for UI request routing
-			setActiveChannel({
-				platform: message.platform,
-				channelId: message.channelId,
-			});
+			// Track which channel triggered this prompt for UI request routing.
+			// Session-per-Room (docs/session-per-room.md §5): with perRoom enabled,
+			// routing + session-ensure + prompt run inside the FIFO queue at
+			// execution time (routing stays with the ACTIVE room, not the waiting
+			// one); without perRoom the same runPrompt is awaited directly —
+			// bit-identical ordering to the pre-per-room path.
+			const perRoom = runtime.config.sessions.perRoom === true;
+			const perRoomLabel = `gateway:${platform}:${message.channelId}`;
 
 			let preText = "";
 
-			// When extension_ui_request arrives (select prompt about to show),
-			// flush full accumulated text into the placeholder
-			setFlushHandler(() => {
-				if (!adapter) return;
-				const completion = peekActiveCompletion();
-				if (completion?.streamedText && sentId) {
-					preText = completion.streamedText;
-					adapter
-						.editMessage(message.channelId, sentId, completion.streamedText)
-						.catch(() => {});
-				}
-			});
-			// When user clicks (via handleInteractiveResponse), invalidate
-			// old placeholder and redirect to fresh message
-			setStreamRedirectHandler(() => {
-				if (!adapter) return;
-				resetActiveStream();
-				sentId = undefined;
-				adapter
-					.sendMessage(message.channelId, "⏳ Thinking…")
-					.then((newId) => {
-						sentId = newId;
-					})
-					.catch(() => {});
-			});
+			const runPrompt = async (): Promise<string> => {
+				setActiveChannel({
+					platform: message.platform,
+					channelId: message.channelId,
+				});
 
-			try {
+				// When extension_ui_request arrives (select prompt about to show),
+				// flush full accumulated text into the placeholder
+				setFlushHandler(() => {
+					if (!adapter) return;
+					const completion = peekActiveCompletion();
+					if (completion?.streamedText && sentId) {
+						preText = completion.streamedText;
+						adapter
+							.editMessage(message.channelId, sentId, completion.streamedText)
+							.catch(() => {});
+					}
+				});
+				// When user clicks (via handleInteractiveResponse), invalidate
+				// old placeholder and redirect to fresh message
+				setStreamRedirectHandler(() => {
+					if (!adapter) return;
+					resetActiveStream();
+					sentId = undefined;
+					adapter
+						.sendMessage(message.channelId, "⏳ Thinking…")
+						.then((newId) => {
+							sentId = newId;
+						})
+						.catch(() => {});
+				});
+
+				// Session-per-Room: ensure the pi session for this room — first
+				// message of a room (unmapped row) → new_session + set_session_name;
+				// known room → switch_session to the mapped pi session file. The
+				// wrapper skip-rule (pi-brain) keeps mapped files out of the archive.
+				if (perRoom) {
+					const ensurePiSession = async (): Promise<void> => {
+						if (!session.piSessionFile) {
+							const state = await newPiSession(perRoomLabel);
+							if (state.sessionFile) {
+								setPiSessionFile(session.id, state.sessionFile);
+								logger.info(
+									`[gateway] Per-room session created for ${perRoomLabel}: ${state.sessionFile}`,
+								);
+							}
+						} else {
+							try {
+								await switchPiSession(session.piSessionFile);
+							} catch (err) {
+								// Mapped file gone (archived externally, moved) → fresh
+								// session instead of failing the message.
+								logger.warn(
+									`[gateway] switch_session to ${session.piSessionFile} failed for ${perRoomLabel} — creating a fresh session`,
+									err,
+								);
+								const state = await newPiSession(perRoomLabel);
+								if (state.sessionFile)
+									setPiSessionFile(session.id, state.sessionFile);
+							}
+						}
+					};
+					await ensurePiSession();
+				}
+
 				logger.info(
 					`[gateway] Sending prompt from ${message.platform}/${message.userId} (session: ${session.id.slice(0, 12)}...)`,
 				);
@@ -413,7 +457,7 @@ const adapterCallbacks: AdapterCallbacks = {
 					attachments: message.attachments,
 				});
 
-				const responseText = await sendPromptRpc(
+				return sendPromptRpc(
 					promptText,
 					session.id,
 					images.length > 0 ? images : undefined,
@@ -430,6 +474,16 @@ const adapterCallbacks: AdapterCallbacks = {
 							}
 						: undefined,
 				);
+			};
+
+			try {
+				const responseText = perRoom
+					? await enqueuePromptTask(
+							perRoomLabel,
+							runPrompt,
+							runtime.config.promptTimeoutMs ?? 300000,
+						)
+					: await runPrompt();
 
 				logger.info(
 					`[gateway] Response received, length: ${responseText.length}, sending back to ${message.platform}/${message.channelId}`,

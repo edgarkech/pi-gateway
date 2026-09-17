@@ -55,6 +55,7 @@ A robust, modular channel adapter for the pi coding agent — reliable communica
 ## 🔵 Open Items
 
 - [ ] **Nextcloud Talk file sharing with a real client** — the client-side file share format is covered by mock/E2E harness so far; verify against a production Nextcloud client.
+- [ ] **Session-per-Room live verification** — implemented and tested (mock level); verify with a live message series à la QED-Test (3 rooms, overlapping → 3 pi session files, no rejections), then enable `sessions.perRoom` in production config.
 - [ ] **TUI status flapping** — cosmetic flicker of the status footer in idle mode (RPC timing); generation counter exists, test invariant missing.
 - [ ] **SIGHUP-based config reload** — config-file watching already triggers an adapter restart; explicit SIGHUP signal path not implemented.
 - [ ] **Slash commands over channels** — currently out of scope: the anti-loop filter drops Talk slash-commands (`messageType=command`); gateway meta-commands run as plain text messages. Decision on real Talk slash-command support pending.
@@ -62,4 +63,4 @@ A robust, modular channel adapter for the pi coding agent — reliable communica
 
 ---
 
-*Last updated: 2026-09-14*
+*Last updated: 2026-09-17*

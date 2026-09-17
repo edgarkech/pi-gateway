@@ -150,6 +150,10 @@ export interface GatewayConfig {
 		resetPolicy: "daily" | "idle" | "both";
 		dailyHour: number;
 		idleMinutes: number;
+		/** Session-per-Room (docs/session-per-room.md §5): je Raum eine eigene
+		 *  pi-Session (switch/new + globale FIFO-Queue). Default false →
+		 *  heutiges Verhalten (eine Session für alle Räume). */
+		perRoom: boolean;
 	};
 	/** Phase 3: File-Attachments / Media-Handling (concept §10). */
 	media?: MediaConfig;

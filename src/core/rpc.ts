@@ -7,6 +7,7 @@ import { getPackageRoot } from "../paths.js";
 import { runtime, type RpcProcess } from "../state.js";
 import type { ImageContent } from "../media/types.js";
 import type { RpcConfig } from "../types.js";
+import { setAgentBusy, rejectAllQueueTasks } from "./prompt-queue.js";
 import {
 	setStdinWriter,
 	setActiveChannel,
@@ -190,6 +191,15 @@ function startRpc(): RpcProcess {
 					}
 				}
 
+				// Session-per-Room (docs/session-per-room.md §5): busy tracking
+				// over the native agent events — the queue drains on agent_settled.
+				if (msg.type === "agent_start") {
+					setAgentBusy(true);
+				}
+				if (msg.type === "agent_settled") {
+					setAgentBusy(false);
+				}
+
 				// Stream text deltas to the matching completion. Match by sessionId
 				// when available; fall back to the most recently added completion.
 				if (
@@ -250,6 +260,8 @@ function startRpc(): RpcProcess {
 		}
 		pendingCompletions.clear();
 		lastActiveSessionId = null;
+		// Session-per-Room: queued (not yet started) tasks have no agent left.
+		rejectAllQueueTasks("pi process exited");
 		// Clean up any pending interactive UI requests
 		cleanupPendingUiRequests();
 		setActiveChannel(null);
@@ -393,6 +405,79 @@ export async function sendPromptRpc(
 	});
 }
 
+// ── Session-per-Room primitives (docs/session-per-room.md §3/§5) ───────────
+// Native pi-RPC building blocks, no pi-code changes. Exported for the
+// message-pipeline orchestration and unit testing.
+
+/** pi state snapshot (subset relevant for per-room session management). */
+export interface PiSessionState {
+	sessionFile: string | null;
+	sessionId: string | null;
+	sessionName: string | null;
+}
+
+/** Capture the current pi session state of the RPC child (native get_state). */
+export async function getPiState(): Promise<PiSessionState> {
+	const res = (await sendRpc("get_state")) as {
+		success: boolean;
+		data?: {
+			sessionFile?: string | null;
+			sessionId?: string | null;
+			sessionName?: string | null;
+		};
+	};
+	if (!res.success) {
+		throw new Error(`get_state failed: ${JSON.stringify(res)}`);
+	}
+	return {
+		sessionFile: res.data?.sessionFile ?? null,
+		sessionId: res.data?.sessionId ?? null,
+		sessionName: res.data?.sessionName ?? null,
+	};
+}
+
+/**
+ * Create a new pi session (native new_session — fires session_shutdown with
+ * reason "new" for the previous session) and label it via set_session_name
+ * (session_info entry in the JSONL, machine-readable for pi-brain).
+ * Returns the new session file as reported by get_state.
+ */
+export async function newPiSession(name?: string): Promise<PiSessionState> {
+	const res = (await sendRpc("new_session")) as {
+		success: boolean;
+		data?: { cancelled?: boolean };
+	};
+	if (!res.success) {
+		throw new Error(`new_session failed: ${JSON.stringify(res)}`);
+	}
+	if (name) {
+		const nameRes = (await sendRpc("set_session_name", { name })) as {
+			success: boolean;
+		};
+		if (!nameRes.success) {
+			throw new Error(`set_session_name failed: ${JSON.stringify(nameRes)}`);
+		}
+	}
+	return getPiState();
+}
+
+/**
+ * Switch the pi RPC child to an existing session file (native switch_session
+ * — fires session_shutdown with reason "resume" for the current session).
+ * Returns the pi-reported result (contains `cancelled` when an extension
+ * blocked the switch — no such handlers are registered today).
+ */
+export async function switchPiSession(sessionPath: string): Promise<{ cancelled?: boolean }> {
+	const res = (await sendRpc("switch_session", { sessionPath })) as {
+		success: boolean;
+		data?: { cancelled?: boolean };
+	};
+	if (!res.success) {
+		throw new Error(`switch_session failed: ${JSON.stringify(res)}`);
+	}
+	return res.data ?? {};
+}
+
 /** Stops the pi RPC process (kill + clear). */
 export function stopRpc(): void {
 	if (runtime.rpcProcess) {
@@ -414,6 +499,8 @@ export function restartRpc(): void {
 	}
 	pendingCompletions.clear();
 	lastActiveSessionId = null;
+	// Session-per-Room: queued (not yet started) tasks have no agent left.
+	rejectAllQueueTasks("Agent restarted by admin");
 	runtime.rpcProcess = startRpc();
 }
 

@@ -41,6 +41,10 @@ export interface SessionConfig {
 	createdAt: number;
 	isBackground: boolean;
 	parentSessionId?: string; // For background task tracking
+	/** Session-per-Room (docs/session-per-room.md §4): pi-side session file
+	 *  this gateway session maps to. Undefined until the first per-room
+	 *  prompt created the mapping. */
+	piSessionFile?: string;
 }
 
 interface SessionRow {
@@ -55,6 +59,7 @@ interface SessionRow {
 	created_at: number;
 	is_background: number;
 	parent_session_id: string | null;
+	pi_session_file: string | null;
 }
 
 let db: Database.Database | null = null;
@@ -96,9 +101,18 @@ export function initSessionStore(dir?: string): Database.Database {
       created_at INTEGER NOT NULL,
       is_background INTEGER NOT NULL DEFAULT 0,
       parent_session_id TEXT,
+      pi_session_file TEXT,
       FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
     )
   `);
+
+	// Session-per-Room (docs/session-per-room.md §4): additive, idempotent
+	// migration for pre-existing databases (ALTER TABLE … ADD COLUMN).
+	const existingCols = db.pragma("table_info(sessions)") as Array<{ name: string }>;
+	if (!existingCols.some((col) => col.name === "pi_session_file")) {
+		db.exec("ALTER TABLE sessions ADD COLUMN pi_session_file TEXT");
+		logger.info("[SessionStore] Migration: added sessions.pi_session_file column");
+	}
 
 	// Indexes for fast lookups
 	db.exec(
@@ -197,8 +211,8 @@ export function getOrCreateSession(
 	database
 		.prepare(
 			`
-    INSERT INTO sessions (id, platform, channel_id, user_id, reset_policy, daily_hour, idle_minutes, last_activity, created_at, is_background, parent_session_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, platform, channel_id, user_id, reset_policy, daily_hour, idle_minutes, last_activity, created_at, is_background, parent_session_id, pi_session_file)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
 		)
 		.run(
@@ -213,6 +227,7 @@ export function getOrCreateSession(
 			session.createdAt,
 			session.isBackground ? 1 : 0,
 			session.parentSessionId ?? null,
+			session.piSessionFile ?? null,
 		);
 
 	logger.info(
@@ -252,8 +267,8 @@ export function createBackgroundSession(
 	database
 		.prepare(
 			`
-    INSERT INTO sessions (id, platform, channel_id, user_id, reset_policy, daily_hour, idle_minutes, last_activity, created_at, is_background, parent_session_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, platform, channel_id, user_id, reset_policy, daily_hour, idle_minutes, last_activity, created_at, is_background, parent_session_id, pi_session_file)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
 		)
 		.run(
@@ -268,10 +283,23 @@ export function createBackgroundSession(
 			session.createdAt,
 			1, // is_background
 			session.parentSessionId ?? null,
+			null, // pi_session_file — background sessions get no pi mapping
 		);
 
 	logger.info(`[SessionStore] Created background session ${id.slice(0, 12)}...`);
 	return session;
+}
+
+/**
+ * Session-per-Room (docs/session-per-room.md §4/§5): persist the pi-side
+ * session file a gateway session maps to. Called right after the per-room
+ * ensure flow created/resumed the pi session (new_session/switch_session).
+ */
+export function setPiSessionFile(sessionId: string, piSessionFile: string): void {
+	const database = initSessionStore();
+	database
+		.prepare("UPDATE sessions SET pi_session_file = ? WHERE id = ?")
+		.run(piSessionFile, sessionId);
 }
 
 /**
@@ -405,5 +433,6 @@ function rowToSession(row: SessionRow): SessionConfig {
 		createdAt: row.created_at,
 		isBackground: row.is_background === 1,
 		parentSessionId: row.parent_session_id ?? undefined,
+		piSessionFile: row.pi_session_file ?? undefined,
 	};
 }

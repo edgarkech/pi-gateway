@@ -18,7 +18,8 @@
 	"sessions": {
 		"resetPolicy": "idle",
 		"dailyHour": 4,
-		"idleMinutes": 1440
+		"idleMinutes": 1440,
+		"perRoom": false
 	},
 	"rpc": {
 		"model": "",

@@ -510,3 +510,43 @@ describe("loadConfig", () => {
 		assert.equal(typeof cfg.media!.enabled, "boolean");
 	});
 });
+
+// Session-per-Room (docs/session-per-room.md §5) — sessions.perRoom flag:
+// deep-merge defaults, boolean validation, explicit true/false round-trip.
+describe("mergeGatewayConfig — sessions.perRoom (session-per-room §5)", () => {
+	it("defaults perRoom to false when the sessions block is absent", () => {
+		const merged = mergeGatewayConfig({ ...base } as GatewayConfig);
+		assert.equal(merged.sessions.perRoom, false);
+	});
+
+	it("deep-merges perRoom: true over the defaults without losing session defaults", () => {
+		const merged = mergeGatewayConfig({
+			...base,
+			sessions: { perRoom: true },
+		} as GatewayConfig);
+		assert.equal(merged.sessions.perRoom, true);
+		// Untouched defaults survive the deep merge.
+		assert.equal(merged.sessions.resetPolicy, DEFAULT_CONFIG.sessions.resetPolicy);
+		assert.equal(merged.sessions.dailyHour, DEFAULT_CONFIG.sessions.dailyHour);
+		assert.equal(merged.sessions.idleMinutes, DEFAULT_CONFIG.sessions.idleMinutes);
+	});
+
+	it("accepts an explicit perRoom: false", () => {
+		const merged = mergeGatewayConfig({
+			...base,
+			sessions: { perRoom: false },
+		} as GatewayConfig);
+		assert.equal(merged.sessions.perRoom, false);
+	});
+
+	it("rejects a non-boolean perRoom", () => {
+		assert.throws(
+			() => mergeGatewayConfig({ ...base, sessions: { perRoom: "yes" } } as GatewayConfig),
+			/config.sessions.perRoom must be a boolean/,
+		);
+	});
+
+	it("exposes the sessions defaults incl. perRoom in DEFAULT_CONFIG", () => {
+		assert.equal(DEFAULT_CONFIG.sessions.perRoom, false);
+	});
+});

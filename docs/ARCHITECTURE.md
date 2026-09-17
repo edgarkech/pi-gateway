@@ -28,6 +28,8 @@ Two cooperating layers:
 
 **One RPC process, sessionId-multiplexed.** All chat sessions share a single pi RPC child process (`runtime.rpcProcess` in `src/core/rpc.ts`). Prompts are tagged with the gateway `sessionId`; streaming deltas (`message_update`) and completions (`agent_end`) are correlated through `Map<sessionId, PendingCompletion>` — the sessionId, not array position, resolves each completion (no FIFO ambiguity). Agent turns are processed by that single process (serial turn queue): a long-running turn delays other channels, and there is no per-channel process isolation. Idle teardown and abort kill and respawn the shared process; the sessions store treats the next message as a fresh session.
 
+**Session-per-Room mode (`sessions.perRoom`, default off).** Optional per-room pi sessions on top of the single-process model (see `session-per-room.md`): each room (`platform`/`channelId`) maps to its own pi session file (store column `pi_session_file`); the gateway switches the pi child per message via native `new_session`/`switch_session` + `set_session_name` (label `gateway:<platform>:<channelId>`), and overlapping prompts from different rooms are queued in a global FIFO (`prompt-queue.ts`, drained on `agent_settled`) instead of being rejected by pi. Still one RPC process and one LLM stream — rooms serialize through the queue; no per-room processes. Feature flag in `config.json` (`sessions.perRoom: true`), default `false` keeps the behavior above.
+
 > **Trade-off note:** the LLM backend is the real bottleneck, not the process architecture — with a local model, concurrent agent turns compete for LLM slots (shared context window / hardware resources). This is the documented motivation for the configurable gateway model/persona (see `rpc-persona.md`).
 
 > Design rationale and migration history: [`adr-rpc-session-management.md`](adr-rpc-session-management.md).
@@ -37,7 +39,8 @@ Two cooperating layers:
 | Module | Responsibility |
 |---|---|
 | `server.ts` | HTTP + WebSocket server, API auth (Bearer tokens), cron-ish housekeeping |
-| `rpc.ts` | Spawns the single pi RPC process; multiplexes prompts, streaming deltas (`message_update`) and completions (`agent_end`) by `sessionId`; abort/restart of the shared process |
+| `rpc.ts` | Spawns the single pi RPC process; multiplexes prompts, streaming deltas (`message_update`) and completions (`agent_end`) by `sessionId`; per-room session primitives (`get_state`/`new_session`/`switch_session`/`set_session_name`, busy tracking over `agent_start`/`agent_settled`); abort/restart of the shared process |
+| `prompt-queue.ts` | Global FIFO prompt queue for Session-per-Room: queues overlapping prompts while the agent is busy, drains on `agent_settled`, per-entry timeout (`promptTimeoutMs`) |
 | `message-pipeline.ts` | The inbound path (see §5): media ingest → rate limit → allowlist/pairing → tool-policy directive → session resolution → RPC prompt |
 | `commands.ts` | The `/gateway` slash-command handler (status, allow, pair, admin, tool-policy, sessions, tasks, config) |
 | `tools.ts` | The 5 registered tools: `gateway_status`, `gateway_sessions`, `gateway_background_tasks`, `gateway_pairing`, `gateway_tool_policy` |
@@ -103,7 +106,7 @@ Enforcement order on every inbound message: **rate limiting → allowlist → to
 
 ## 8. Sessions & background tasks
 
-- **Sessions store** (`src/sessions/`, SQLite): one row per chat (`platform + channelId + userId` → `sessionId`), reset policies `daily` / `idle` / `both`; sessions survive gateway restarts.
+- **Sessions store** (`src/sessions/`, SQLite): one row per chat (`platform + channelId + userId` → `sessionId`), reset policies `daily` / `idle` / `both`; sessions survive gateway restarts. With `sessions.perRoom` enabled, rows carry a `pi_session_file` mapping (gateway chat → pi-side session file; additive migration); a reset (daily/idle, `/new`) deletes the row and thereby the mapping — the next message starts a fresh pi session and the old file is archived by pi-brain (unmapped).
 - **Background tasks** (`src/background/`): long-running work is spawned in isolated child sessions; results are delivered back to the parent chat when done (`/gateway tasks`).
 
 ## 9. Runtime state (`src/state.ts`)

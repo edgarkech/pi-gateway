@@ -25,6 +25,9 @@ const DEFAULT_CONFIG: GatewayConfig = {
 		resetPolicy: "idle",
 		dailyHour: 4,
 		idleMinutes: 1440,
+		// Session-per-Room (docs/session-per-room.md §5): disabled by default —
+		// feature flag with a one-line rollback path (set false).
+		perRoom: false,
 	},
 	promptTimeoutMs: 300000, // 5 minutes — override to increase for slow models
 	// rpc-persona (docs/rpc-persona.md §3): empty strings keep today's
@@ -179,6 +182,10 @@ function mergeGatewayConfig(value: unknown): GatewayConfig {
 		merged.sessions.idleMinutes <= 0
 	) {
 		throw new Error("Invalid session reset timing");
+	}
+	// Session-per-Room (docs/session-per-room.md §5): boolean type check.
+	if (typeof merged.sessions.perRoom !== "boolean") {
+		throw new Error("config.sessions.perRoom must be a boolean");
 	}
 
 	// Phase 3 (S6): validate the optional media block (concept §10).
