@@ -369,6 +369,18 @@ describe("resolveUserId (§6.4)", () => {
 		expect(resolveUserId(talkMessage({ actorType: "users", actorId: "alice" }))).toBe("alice");
 	});
 
+	it('liefert bei actorType === "bots" die stabile actorId (2026-09-20: Allowlist-kompatibel)', () => {
+		expect(
+			resolveUserId(
+				talkMessage({
+					actorType: "bots",
+					actorId: "bot-2a9f834a",
+					actorDisplayName: "Pepe (Bot)",
+				}),
+			),
+		).toBe("bot-2a9f834a");
+	});
+
 	it("liefert bei Gästen den Anzeigenamen", () => {
 		expect(
 			resolveUserId(

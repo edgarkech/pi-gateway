@@ -167,11 +167,12 @@ export function isPublishable(config: NextcloudTalkConfig, msg: TalkChatMessage)
 
 /**
  * `PlatformMessage.userId` aus dem Sender ableiten (Konzept §6.4): bei
- * `actorType === "users"` der stabile Nextcloud-UserID (Allowlist-kompatibel),
+ * `actorType === "users"` oder `"bots"` die stabile Nextcloud-ActorID
+ * (Allowlist-kompatibel, 2026-09-20: Bots via allowedBots erlauben),
  * sonst Anzeigename mit Fallback auf actorId (Gäste/Federation).
  */
 export function resolveUserId(msg: TalkChatMessage): string {
-	if (msg.actorType === "users") return msg.actorId;
+	if (msg.actorType === "users" || msg.actorType === "bots") return msg.actorId;
 	return msg.actorDisplayName || msg.actorId;
 }
 

@@ -72,10 +72,24 @@ const adapterCallbacks: AdapterCallbacks = {
 			return;
 		}
 
+		// 2026-09-20 Festzurrung: Bot-Allowlist-Bypass — gelistete Bots
+		// (platforms.nextcloudTalk.allowedBots) laufen wie Menschen durch den
+		// Security-Layer; fremde Bots werden still verworfen (keine Meldung —
+		// sie würde Lärm + Antwort-Loops provozieren).
+		const actorTypeRaw = message.metadata?.actorType;
+		const actorType = typeof actorTypeRaw === "string" ? actorTypeRaw : undefined;
+		const allowedBots = runtime.config?.platforms?.nextcloudTalk?.allowedBots;
+		const isAllowedBot =
+			actorType === "bots" && !!allowedBots?.includes(message.userId);
+
 		// Check allowlist
-		if (!isUserAllowed(platform, message.userId)) {
+		if (!isAllowedBot && !isUserAllowed(platform, message.userId)) {
 			logger.info(`[gateway] User ${message.userId} not in allowlist`);
 			await discardMediaAttachments(message.attachments);
+			if (actorType === "bots") {
+				// Fremder Bot: still verwerfen (keine Meldung in den Raum).
+				return;
+			}
 			const adapter = runtime.state.adapters.get(message.platform);
 			if (isPairingRequired()) {
 				if (adapter) {
