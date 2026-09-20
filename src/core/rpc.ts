@@ -443,6 +443,7 @@ export async function getPiState(): Promise<PiSessionState> {
  * Returns the new session file as reported by get_state.
  */
 export async function newPiSession(name?: string): Promise<PiSessionState> {
+	logger.info(`[gateway] RPC new_session${name ? ` + set_session_name "${name}"` : ""}`);
 	const res = (await sendRpc("new_session")) as {
 		success: boolean;
 		data?: { cancelled?: boolean };
@@ -451,14 +452,13 @@ export async function newPiSession(name?: string): Promise<PiSessionState> {
 		throw new Error(`new_session failed: ${JSON.stringify(res)}`);
 	}
 	if (name) {
-		const nameRes = (await sendRpc("set_session_name", { name })) as {
-			success: boolean;
-		};
-		if (!nameRes.success) {
-			throw new Error(`set_session_name failed: ${JSON.stringify(nameRes)}`);
-		}
+		await setPiSessionName(name);
 	}
-	return getPiState();
+	const state = await getPiState();
+	logger.info(
+		`[gateway] RPC new_session → session: ${state.sessionId ?? "?"} file: ${state.sessionFile ?? "?"} name: ${state.sessionName ?? "none"}`,
+	);
+	return state;
 }
 
 /**
@@ -468,6 +468,7 @@ export async function newPiSession(name?: string): Promise<PiSessionState> {
  * blocked the switch — no such handlers are registered today).
  */
 export async function switchPiSession(sessionPath: string): Promise<{ cancelled?: boolean }> {
+	logger.info(`[gateway] RPC switch_session → ${sessionPath}`);
 	const res = (await sendRpc("switch_session", { sessionPath })) as {
 		success: boolean;
 		data?: { cancelled?: boolean };
@@ -475,7 +476,26 @@ export async function switchPiSession(sessionPath: string): Promise<{ cancelled?
 	if (!res.success) {
 		throw new Error(`switch_session failed: ${JSON.stringify(res)}`);
 	}
+	logger.info(
+		`[gateway] RPC switch_session ok${res.data?.cancelled ? " (cancelled by extension)" : ""}`,
+	);
 	return res.data ?? {};
+}
+
+/**
+ * Label the current pi session (native set_session_name — session_info entry
+ * in the JSONL, machine-readable for pi-brain). Idempotent; used by the
+ * per-room flow to enforce the gateway:<platform>:<channelId> label on
+ * resumed sessions too (docs/jsonl-session-labeling.md §3.1).
+ */
+export async function setPiSessionName(name: string): Promise<void> {
+	logger.info(`[gateway] RPC set_session_name "${name}"`);
+	const res = (await sendRpc("set_session_name", { name })) as {
+		success: boolean;
+	};
+	if (!res.success) {
+		throw new Error(`set_session_name failed: ${JSON.stringify(res)}`);
+	}
 }
 
 /** Stops the pi RPC process (kill + clear). */

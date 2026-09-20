@@ -303,6 +303,30 @@ export function setPiSessionFile(sessionId: string, piSessionFile: string): void
 }
 
 /**
+ * Timestamp of the most recent dailyHour boundary (dailyHour:00 local time)
+ * at or before `ts`. A session resets when this boundary moved forward since
+ * the session was created.
+ */
+function dailyBoundaryBefore(ts: number, dailyHour: number): number {
+	const d = new Date(ts);
+	const boundary = new Date(d);
+	boundary.setHours(dailyHour, 0, 0, 0);
+	if (boundary.getTime() > ts) {
+		boundary.setDate(boundary.getDate() - 1);
+	}
+	return boundary.getTime();
+}
+
+/**
+ * True when a dailyHour boundary lies strictly between `fromTs` and `nowTs`
+ * — i.e. the daily reset hour was crossed since the session was created.
+ * Exported for unit testing (jsonl-session-labeling.md §3.5).
+ */
+export function crossedDailyBoundary(fromTs: number, nowTs: number, dailyHour: number): boolean {
+	return dailyBoundaryBefore(nowTs, dailyHour) > dailyBoundaryBefore(fromTs, dailyHour);
+}
+
+/**
  * Check if session should be reset
  */
 function shouldResetSession(row: SessionRow): boolean {
@@ -317,11 +341,13 @@ function shouldResetSession(row: SessionRow): boolean {
 
 	// Check daily reset
 	if (row.reset_policy === "daily" || row.reset_policy === "both") {
-		const lastActivity = new Date(row.last_activity);
-		const nowDate = new Date(now);
-
-		// Check if we crossed the daily reset hour since last activity
-		if (lastActivity.getHours() < row.daily_hour && nowDate.getHours() >= row.daily_hour) {
+		// Reference created_at (fix, jsonl-session-labeling.md §3.5): the former
+		// comparison compared the hour-of-day of last_activity — but
+		// last_activity is refreshed on every message, which made the daily
+		// reset practically unreachable for active sessions. Reset fires on the
+		// first message after the most recent dailyHour boundary crossed since
+		// the session was created (resetPolicy=both: daily 01:00 + 24h idle).
+		if (crossedDailyBoundary(row.created_at, now, row.daily_hour)) {
 			logger.info(
 				`[SessionStore] Session ${row.id.slice(0, 8)} reset: daily at ${row.daily_hour}:00`,
 			);

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { logger } from "../logger.js";
 import { runtime } from "../state.js";
 import { getOrCreateSession, deleteSession, setPiSessionFile } from "../sessions/store.js";
@@ -27,6 +28,8 @@ import {
 	resetActiveStream,
 	newPiSession,
 	switchPiSession,
+	getPiState,
+	setPiSessionName,
 } from "./rpc.js";
 import { enqueuePromptTask } from "./prompt-queue.js";
 import { updateStatus } from "./status-footer.js";
@@ -408,13 +411,24 @@ const adapterCallbacks: AdapterCallbacks = {
 						.catch(() => {});
 				});
 
-				// Session-per-Room: ensure the pi session for this room — first
-				// message of a room (unmapped row) → new_session + set_session_name;
-				// known room → switch_session to the mapped pi session file. The
-				// wrapper skip-rule (pi-brain) keeps mapped files out of the archive.
+				// Session-per-Room (docs/session-per-room.md §5,
+				// docs/jsonl-session-labeling.md §3): ensure the pi session for this
+				// room.
+				//   unmapped row OR mapped file gone (deleted/moved) → new_session +
+				//   set_session_name — fresh file, fresh timestamp. pi does NOT fail
+				//   on a missing switch target: SessionManager.open silently opens an
+				//   unlabeled fresh session whose filename inherits the stale path's
+				//   timestamp (jsonl-session-labeling.md §1.2.1) — so a missing file
+				//   must never reach switch_session.
+				//   known room → switch_session + post-switch verification: the
+				//   actual sessionFile must match the mapping (re-map if not) and the
+				//   label (sessionName) must be present — set_session_name is
+				//   idempotent (jsonl-session-labeling.md §3.1/§3.2).
+				// The wrapper skip-rule (pi-brain) keeps mapped files out of the archive.
 				if (perRoom) {
 					const ensurePiSession = async (): Promise<void> => {
-						if (!session.piSessionFile) {
+						const mapped = session.piSessionFile;
+						if (!mapped || !existsSync(mapped)) {
 							const state = await newPiSession(perRoomLabel);
 							if (state.sessionFile) {
 								setPiSessionFile(session.id, state.sessionFile);
@@ -422,20 +436,41 @@ const adapterCallbacks: AdapterCallbacks = {
 									`[gateway] Per-room session created for ${perRoomLabel}: ${state.sessionFile}`,
 								);
 							}
-						} else {
-							try {
-								await switchPiSession(session.piSessionFile);
-							} catch (err) {
-								// Mapped file gone (archived externally, moved) → fresh
-								// session instead of failing the message.
+							return;
+						}
+						try {
+							await switchPiSession(mapped);
+						} catch (err) {
+							// Switch itself failed → fresh session instead of failing the message.
+							logger.warn(
+								`[gateway] switch_session to ${mapped} failed for ${perRoomLabel} — creating a fresh session`,
+								err,
+							);
+							const state = await newPiSession(perRoomLabel);
+							if (state.sessionFile) setPiSessionFile(session.id, state.sessionFile);
+							return;
+						}
+						// Post-switch verification (self-healing). A failed verification
+						// must not kill the message — the switch itself succeeded.
+						try {
+							const state = await getPiState();
+							if (state.sessionFile && state.sessionFile !== mapped) {
 								logger.warn(
-									`[gateway] switch_session to ${session.piSessionFile} failed for ${perRoomLabel} — creating a fresh session`,
-									err,
+									`[gateway] switch_session landed on ${state.sessionFile} (expected ${mapped}) for ${perRoomLabel} — re-mapping`,
 								);
-								const state = await newPiSession(perRoomLabel);
-								if (state.sessionFile)
-									setPiSessionFile(session.id, state.sessionFile);
+								setPiSessionFile(session.id, state.sessionFile);
 							}
+							if (state.sessionName !== perRoomLabel) {
+								await setPiSessionName(perRoomLabel);
+								logger.info(
+									`[gateway] Session label set for ${perRoomLabel} (was: ${state.sessionName ?? "none"})`,
+								);
+							}
+						} catch (err) {
+							logger.warn(
+								`[gateway] Post-switch state verification failed for ${perRoomLabel}`,
+								err,
+							);
 						}
 					};
 					await ensurePiSession();

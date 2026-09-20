@@ -1,6 +1,6 @@
 # Session-per-Room — pi-seitige Sessions je Raum (Option A)
 
-**Status:** Umgesetzt (Variante A, 2026-09-17) — Feature-Flag `sessions.perRoom` (Default aus), 463 Tests grün; Live-Verifikation + Produktiv-Aktivierung ausstehend (Offene Punkte §8)
+**Status:** Umgesetzt (Variante A, 2026-09-17) — Feature-Flag `sessions.perRoom` (Default aus), 480 Tests grün; produktiv aktiv seit 2026-09-17 (Live-Verifikation + Aktivierung 17.09.); Label-Nachziehen + Self-Heal nachgezogen 2026-09-20 (docs/jsonl-session-labeling.md)
 **Scope:** `src/core/rpc.ts` · `src/core/message-pipeline.ts` · `src/sessions/store.ts` (+ DB-Schema) · abhängig: pi-brain pipeline_wrapper (Skip-Regel, separates Projekt)
 **Verwandt:** `docs/rpc-persona.md` (rpc-Felder: Modell/Systemprompt/CWD) · `docs/adr-rpc-session-management.md` (ADR-Status) · `docs/ARCHITECTURE.md`
 
@@ -38,7 +38,7 @@
 
 - **Feature-Flag:** `sessions.perRoom: true` in `config.json` (Default `false` → heutiges Verhalten; Rollback-Pfad). `DEFAULT_CONFIG` + Deep-Merge erweitern, Typ-Validierung (boolean).
 - **Erste Nachricht eines Raums** (Row ohne `pi_session_file`): `new_session` → `set_session_name "gateway:<platform>:<channelId>"` → `get_state` → `pi_session_file` in der Row speichern → `prompt`.
-- **Nachricht aus bekanntem Raum** (Agent idle): `switch_session(pi_session_file)` → `prompt`.
+- **Nachricht aus bekanntem Raum** (Agent idle): Pre-Check `existsSync(pi_session_file)` — fehlt die Datei (hart gelöscht/moved): `new_session` + Label + Re-Mapping (pi wirft bei fehlendem Switch-Ziel NICHT — `SessionManager.open` öffnet still eine unlabeled frische Session mit ererbtem Timestamp, docs/jsonl-session-labeling.md §1.2.1); existiert sie: `switch_session(pi_session_file)` → Post-Switch-Verifikation via `get_state` (Re-Mapping bei Pfad-Mismatch) + Label-Nachziehen (`set_session_name` idempotent, auch im switch/resume-Zweig — Fix 2026-09-20, docs/jsonl-session-labeling.md §3) → `prompt`.
 - **Agent beschäftigt:** Nachricht in eine **globale FIFO-Queue** (Serialisierung über den einen LLM-Stream); bei `agent_settled` → nächsten Queue-Eintrag verarbeiten (switch/new → prompt). Timeout je Queue-Eintrag = `promptTimeoutMs`.
 - **Busy-Erkennung:** über die `agent_start`/`agent_settled`-Events (statt der heutigen Prompt-Rejection als Fehlerpfad).
 - **Boot-Session:** der Child erzeugt beim Spawn eine leere Session — sie wird beim ersten Wechsel verlassen und (unmapped) vom Dreaming archiviert. Rauschen: eine leere Datei je Child-Start, bewusst akzeptiert.
