@@ -66,7 +66,7 @@ Operates **without a public URL**: the gateway authenticates as a regular Nextcl
 
 - **Long-poll first** (`lookIntoFuture=1`), interval fallback; exponential backoff + circuit breaker protect the Nextcloud instance.
 - **Persistent watermarks:** `lastKnownMessageId` per room in a SQLite `talk_state` store → restarts resume exactly, no re-processing, no gaps.
-- **Two-layer anti-loop:** poller pre-filter + central `isPublishable` drop own messages, bot actors, and system events; the watermark advances past them. The invariant *"one agent call per user message, never triggered by the bot itself"* is pinned by `tests/core/anti-loop-edge.test.ts`.
+- **Three-layer inbound filtering (2026-09-20):** security allowlist (human users; listed bots via `platforms.nextcloudTalk.allowedBots` bypass it — treated like human users for supervised bot-to-bot talk; unknown bots are discarded **silently**, no reply) → poller pre-filter + central `isPublishable` drop own messages, non-allowlisted bot actors, and system events; the watermark advances past them. Bot actorIds resolve to the stable `actorId` (`resolveUserId`), not the display name. In group messages not explicitly addressed (`@Igor`/`@all`), the model is instructed to answer with an empty/silent note; the current model replies with a brief silence note instead of truly empty — accepted for now (implicit hint to other participants to address the bot directly). The invariant *"one agent call per user message, never triggered by the bot itself"* is pinned by `tests/core/anti-loop-edge.test.ts`.
 - **Room handling:** explicit room tokens in config; `autoDiscoverRooms` + `roomRefreshIntervalMs` merge discovered rooms at runtime (fail-open). Read markers are set after processing (`POST /chat/{token}/read`).
 - **Media:** shared files/images are downloaded via WebDAV as the bot user and pushed through the media pipeline (§6).
 - **API compatibility:** OCS statuscode quirks (NC 33 returns HTTP-200 with `statuscode 200`) are handled; API versions are negotiated per endpoint (`/room` v4, `/chat` v1).
@@ -96,7 +96,7 @@ The pipeline resolves the platform identity (`platform + userId`) against the se
 
 ## 7. Security (`src/security/`)
 
-Enforcement order on every inbound message: **rate limiting → allowlist → tool policies**.
+Enforcement order on every inbound message: **rate limiting → allowlist (with `allowedBots` bypass; unknown bots silent) → tool policies (incl. GROUP MESSAGE RULE: group message not explicitly addressed → respond with empty text)**.
 
 - **Allowlist:** DB-backed, managed at runtime via `/gateway allow|revoke`; config-file `allowedUids` (per platform or `"*"` wildcard) pre-approve users without pairing.
 - **Pairing flow:** `requirePairing` issues 8-character codes (1 h validity) that an admin approves with `/gateway pair <code>`.

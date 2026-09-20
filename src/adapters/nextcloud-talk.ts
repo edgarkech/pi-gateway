@@ -143,9 +143,10 @@ const MEDIA_OBJECT_TYPES = new Set(["file", "media", "audio", "video", "voice", 
  * Der Gateway antwortet als derselbe OCS-User, der auch pollt; ohne diesen
  * Filter würde jede Bot-Antwort erneut als Eingabe verarbeitet.
  *
- * | Bedingung                              | Ergebnis    |
- * |----------------------------------------|-------------|
- * | `actorType === "bots"`                 | verwerfen   |
+ * | Bedingung                                   | Ergebnis    |
+ * |---------------------------------------------|-------------|
+ * | `actorType === "bots"` (nicht in allowedBots) | verwerfen   |
+ * | `actorType === "bots"` (in allowedBots)      | **publishable** (2026-09-20, supervised bot-to-bot talk) |
  * | `actorId === config.userId` (eigene)   | verwerfen   |
  * | `systemMessage !== ""` (System-Event)  | verwerfen   |
  * | `messageType === "command"` (MVP)      | verwerfen   |
