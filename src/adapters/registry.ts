@@ -110,6 +110,7 @@ export async function initializeAdapters(): Promise<void> {
 				roomRefreshIntervalMs: talk.roomRefreshIntervalMs,
 				allowInsecureHttp: talk.allowInsecureHttp,
 				maxAttachmentsPerMessage: talk.maxAttachmentsPerMessage,
+				allowedBots: talk.allowedBots ? [...talk.allowedBots] : [],
 			});
 			await nextcloudTalk.initialize();
 			await nextcloudTalk.start(adapterCallbacks);

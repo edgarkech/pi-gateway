@@ -109,6 +109,7 @@ const NEXTCLOUD_TALK_CONSUMED_FIELDS = [
 	"roomRefreshIntervalMs",
 	"allowInsecureHttp",
 	"maxAttachmentsPerMessage",
+	"allowedBots",
 ] as const;
 
 /**
@@ -186,6 +187,7 @@ export async function restartNextcloudTalkAdapter(config: GatewayConfig): Promis
 			roomRefreshIntervalMs: talk.roomRefreshIntervalMs,
 			allowInsecureHttp: talk.allowInsecureHttp,
 			maxAttachmentsPerMessage: talk.maxAttachmentsPerMessage,
+			allowedBots: talk.allowedBots ? [...talk.allowedBots] : [],
 		});
 		await nextcloudTalk.initialize();
 		await nextcloudTalk.start(adapterCallbacks);

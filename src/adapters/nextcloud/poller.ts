@@ -89,6 +89,10 @@ export interface TalkPollerConfig {
 	 * gefiltert. Default `""` (Eigenfilter aus, z. B. für reine Test-Sets).
 	 */
 	ownUserId?: string;
+	/** Bot-ActorIds, die wie Menschen behandelt werden (2026-09-20 Festzurrung).
+	 *  Nachrichten von Bot-Aktoren mit actorId in dieser Liste werden NICHT
+	 *  gefiltert — alle fremden Bots weiterhin (Anti-Loop D4). Default `[]`. */
+	allowedBots?: string[];
 }
 
 /** Defaults laut Konzept §10 / §9.1. */
@@ -102,6 +106,7 @@ const DEFAULTS: Required<TalkPollerConfig> = {
 	circuitThreshold: 5,
 	batchLimit: 100,
 	ownUserId: "",
+	allowedBots: [],
 };
 
 // ── Zustands-Modelle (für onState / getStatus) ───────────────────────────────
@@ -615,7 +620,11 @@ export class NextcloudTalkPoller {
 	 */
 	private isFiltered(msg: TalkChatMessage): boolean {
 		if (msg.systemMessage !== "") return true;
-		if (msg.actorType === "bots") return true;
+		if (msg.actorType === "bots") {
+			// 2026-09-20 Festzurrung: gelistete Bots (allowedBots) wie Menschen
+			// behandeln — nur fremde Bots weiter gefiltert (Anti-Loop D4).
+			if (!this.cfg.allowedBots?.includes(msg.actorId)) return true;
+		}
 		if (this.cfg.ownUserId !== "" && msg.actorId === this.cfg.ownUserId) return true;
 		return false;
 	}

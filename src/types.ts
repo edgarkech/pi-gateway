@@ -72,6 +72,11 @@ export interface NextcloudTalkPlatformConfig {
 	appToken: string;
 	/** Talk room tokens (MVP: explicitly configured, D2). Required when enabled. */
 	rooms: string[];
+	/** Bot actorIds that are treated like human users (2026-09-20 Festzurrung:
+	 *  supervised bot-to-bot talk). Messages from actors with
+	 *  `actorType === "bots"` whose actorId is NOT in this list are still
+	 *  discarded by the anti-loop filter. Default: [] (all bots filtered). */
+	allowedBots?: string[];
 
 	// Polling (§10)
 	/** Default: "long-poll"; "interval" forces plain interval polling. */

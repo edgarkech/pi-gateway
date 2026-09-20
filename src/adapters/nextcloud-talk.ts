@@ -73,6 +73,10 @@ export interface NextcloudTalkConfig extends PlatformConfig {
 	appToken: string;
 	/** Talk-Raum-Tokens (MVP: explizit konfiguriert, D2). */
 	rooms: string[];
+	/** Bot-ActorIds, die wie Menschen behandelt werden (2026-09-20 Festzurrung:
+	 *  überwachte Bot-zu-Bot-Kommunikation). Bots mit actorId in dieser Liste
+	 *  werden publishable, alle fremden Bots weiter gefiltert. Default: []. */
+	allowedBots?: string[];
 
 	// Polling (Defaults im Poller, §10)
 	pollMode?: "long-poll" | "interval";
@@ -149,7 +153,11 @@ const MEDIA_OBJECT_TYPES = new Set(["file", "media", "audio", "video", "voice", 
  * | sonst (echter User-Text/Datei-Sharing) | **publishable** |
  */
 export function isPublishable(config: NextcloudTalkConfig, msg: TalkChatMessage): boolean {
-	if (msg.actorType === "bots") return false;
+	if (msg.actorType === "bots") {
+		// 2026-09-20 Festzurrung: gelistete Bots (allowedBots) wie Menschen
+		// behandeln — nur fremde Bots bleiben gefiltert (Anti-Loop D4).
+		if (!(config.allowedBots ?? []).includes(msg.actorId)) return false;
+	}
 	if (config.userId !== "" && msg.actorId === config.userId) return false;
 	if (msg.systemMessage !== "") return false;
 	if (msg.messageType === "command") return false;
@@ -784,6 +792,8 @@ export class NextcloudTalkAdapter extends BaseAdapter {
 			// D4: Anti-Loop-Selbstfilter im Poller (Vorschaltfilter; der
 			// zentrale Check läuft zusätzlich in `isPublishable`).
 			ownUserId: this.config.userId,
+			// 2026-09-20: Bot-Allowlist durchreichen (gelistete Bots wie Menschen).
+			allowedBots: [...(this.config.allowedBots ?? [])],
 		};
 	}
 }
