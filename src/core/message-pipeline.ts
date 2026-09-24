@@ -11,7 +11,7 @@ import {
 	isPlatform,
 	type Platform,
 } from "../security/auth.js";
-import { buildPolicyGuard } from "../security/tool-policy.js";
+import { buildPolicyGuard, isBotAddressed } from "../security/tool-policy.js";
 import {
 	handleInteractiveResponse,
 	setActiveChannel,
@@ -41,6 +41,80 @@ import {
 } from "../media/manifest.js";
 import { initMediaManager } from "../media/manager.js";
 import type { ImageContent, MediaAttachment } from "../media/types.js";
+
+// ── Anti-Bot-Loop (Ansatz B): Kanal-Klassifikation „Gruppe vs. DM" ─────────
+
+/** Ergebnis der Kanal-Klassifikation für den Gruppen-Filter. */
+export type ChannelKind = "dm" | "group" | "unknown";
+
+/**
+ * Klassifiziert einen Kanal als Direktnachricht, Gruppe/Kanal oder unklar.
+ *
+ * Quellen (concept-anti-bot-loop-filter §4/§6):
+ * - Explizite `groupRooms`-Labels (`gateway:<platform>:<channelId>`)
+ *   deterministisch zuerst (z. B. Nextcloud-Talk-Räume ohne DM-Flag).
+ * - Platform-Metadaten: Telegram `metadata.chatType` (private vs.
+ *   group/supergroup/channel), Discord `metadata.isDM`, WhatsApp
+ *   `metadata.isGroup`, Nextcloud-Talk ohne DM-Flag (nur groupRooms).
+ *
+ * Sicherheitsseite: `unknown` wertet der Filter als NICHT-Gruppe → DM/unklare
+ * Kanäle bleiben intakt (Randbedingung des Konzepts).
+ */
+export function classifyChannel(
+	platform: string,
+	message: { channelId: string; metadata?: Record<string, unknown> },
+	groupRooms?: readonly string[],
+): ChannelKind {
+	const label = `gateway:${platform}:${message.channelId}`;
+	if (groupRooms?.includes(label)) return "group";
+
+	const meta = message.metadata ?? {};
+	switch (platform) {
+		case "telegram": {
+			const t = meta.chatType;
+			if (typeof t === "string") {
+				if (t === "private") return "dm";
+				if (t === "group" || t === "supergroup" || t === "channel") return "group";
+			}
+			return "unknown";
+		}
+		case "discord":
+			return meta.isDM === true ? "dm" : meta.isDM === false ? "group" : "unknown";
+		case "whatsapp":
+			return meta.isGroup === true ? "group" : meta.isGroup === false ? "dm" : "unknown";
+		default:
+			// Nextcloud-Talk & alle anderen ohne DM/Group-Flag: nur über das
+			// explizite groupRooms-Label als Gruppe erkennbar, sonst unklar.
+			return "unknown";
+	}
+}
+
+/**
+ * Erkennt „leere Nachrichten" im Sinne von concept-anti-bot-loop-filter §5a
+ * (2026-09-24, festgezerrt von Edgar):
+ *
+ * - Länge 0 → leer (`""`).
+ * - Länge 1 mit einem NICHT-alphanumerischen Zeichen **außer** `?`/`!` → leer
+ *   (gefiltert: `"."`, `","`, `";"`, `":"`, `" "`, …).
+ * - NICHT leer (echte Kommunikation): `?`, `!` sowie jede Länge >= 2 und jede
+ *   Länge-1-Nachricht mit alphanumerischem Zeichen (`"a"`, `"1"`, …).
+ *
+ * Diese Nachrichten sind gültiger Loop-Auslösestoff (leere/`.`-Notizen lösen
+ * beim Zweitbot eine Modell-Antwort aus → Bot-auf-Bot-Ping-Pong), werden aber
+ * als echte Kommunikation behandelt. Der Filter greift GLOBAL (alle Absender,
+ * alle Plattformen) zentral im Message-Pfad vor dem Modell-Call — Ausnahme
+ * `isBotAddressed` (siehe onMessage).
+ */
+export function isEmptyMessage(content: string): boolean {
+	if (content.length === 0) return true;
+	if (content.length !== 1) return false;
+	const ch = content[0];
+	if (ch === "?" || ch === "!") return false;
+	// Alphanumerisch = Unicode-Buchstaben (`\p{L}`) oder Ziffern (`\p{N}`);
+	// ein einzelnes alphanumerisches Zeichen ist echte Kommunikation
+	// (auch z. B. "Æ"). Alles andere gilt als leer.
+	return !/^[\p{L}\p{N}]$/u.test(ch);
+}
 
 const adapterCallbacks: AdapterCallbacks = {
 	onMessage: async (message: PlatformMessage) => {
@@ -79,8 +153,7 @@ const adapterCallbacks: AdapterCallbacks = {
 		const actorTypeRaw = message.metadata?.actorType;
 		const actorType = typeof actorTypeRaw === "string" ? actorTypeRaw : undefined;
 		const allowedBots = runtime.config?.platforms?.nextcloudTalk?.allowedBots;
-		const isAllowedBot =
-			actorType === "bots" && !!allowedBots?.includes(message.userId);
+		const isAllowedBot = actorType === "bots" && !!allowedBots?.includes(message.userId);
 
 		// Check allowlist
 		if (!isAllowedBot && !isUserAllowed(platform, message.userId)) {
@@ -355,6 +428,40 @@ const adapterCallbacks: AdapterCallbacks = {
 			}
 		}
 
+		// ── Anti-Bot-Loop (Ansatz B, Leer-Nachrichten-Filter — §5a 2026-09-24) ──
+		// Leere Nachrichten (Länge 0 bzw. Länge 1 mit nicht-alphanumerischem
+		// Zeichen außer ?/!) sind gültiger Loop-Auslösestoff: sie werden bisher
+		// als echte Kommunikation behandelt → Modell-Call → Notiz → Zweitbot
+		// löst wieder aus. GLOBAL (alle Absender, alle Plattformen, alle
+		// Kanäle) vor dem Modell-Call ignorieren — Ausnahme: `isBotAddressed`
+		// (@Igor/@all) überschreibt den Filter (Adressierungs-Regel unverändert,
+		// ADR Pkt. 3).
+		if (isEmptyMessage(message.content) && !isBotAddressed(message.content)) {
+			logger.info(
+				`[gateway] Empty message "${message.content}" — ignoring (anti-bot-loop §5a)`,
+			);
+			await discardMediaAttachments(message.attachments);
+			return;
+		}
+
+		// ── Anti-Bot-Loop (Ansatz B, context-basiert — 2026-09-24) ─────────
+		// Gruppen-/Kanal-Nachricht, die den Bot NICHT explizit adressiert
+		// (@Igor/@all): Modell DETERMINISTISCH nicht befragen → stumm, kein
+		// gesendeter Text, kein Auslösestoff für Bot-auf-Bot-Ping-Pong (auch
+		// die Modell-Stumm-Notiz kann so nie entstehen). DM bleibt intakt —
+		// der Filter greift nur, wenn der Kanal positiv als Gruppe erkannt
+		// wird (platform-Metadaten `chatType`/`isDM`/`isGroup` oder explizite
+		// `groupRooms`-Labels). Konzept §§3/4, ADR bot-allowlist Pkt. 3.
+		const groupRooms = runtime.config.groupRooms ?? [];
+		const channelKind = classifyChannel(platform, message, groupRooms);
+		if (channelKind === "group" && !isBotAddressed(message.content)) {
+			logger.info(
+				`[gateway] Group message not addressed to bot (@Igor/@all) in ${platform}/${message.channelId} — staying silent (anti-bot-loop)`,
+			);
+			await discardMediaAttachments(message.attachments);
+			return;
+		}
+
 		// Send to pi agent with tool policy guard
 		if (isAgentRunning()) {
 			const adapter = runtime.state.adapters.get(message.platform);
@@ -564,18 +671,18 @@ const adapterCallbacks: AdapterCallbacks = {
 					await adapter.setTyping(message.channelId, false);
 					logger.info("[gateway] Response sent to platform successfully");
 				} else if (!responseText && adapter) {
-					logger.warn("[gateway] Response text was empty — nothing to send");
+					// Anti-Bot-Loop (Ansatz B, Hybrid — 2026-09-24): leerer
+					// Antwort-Fallback GLOBAL unterbinden. Zuvor wurde fest
+					// „I processed your message but had no text response." gesendet
+					// — eine real gesendete Notiz genau dieser Art löst beim
+					// Zweitbot einen neuen Bot-auf-Bot-Loop aus. Stattdessen: nichts
+					// senden; die evtl. vorhandene Platzhalter-Message best-effort
+					// entfernen (kein Auslösestoff, keine Notiz im Raum).
+					logger.warn(
+						"[gateway] Empty response — suppressing fallback text (anti-bot-loop)",
+					);
 					if (sentId) {
-						await adapter.editMessage(
-							message.channelId,
-							sentId,
-							"I processed your message but had no text response. Please try again.",
-						);
-					} else {
-						await adapter.sendMessage(
-							message.channelId,
-							"I processed your message but had no text response. Please try again.",
-						);
+						await adapter.deleteMessage(message.channelId, sentId).catch(() => {});
 					}
 					clearInterval(typingInterval);
 					await adapter.setTyping(message.channelId, false);

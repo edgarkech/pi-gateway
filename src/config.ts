@@ -37,6 +37,10 @@ const DEFAULT_CONFIG: GatewayConfig = {
 		systemPrompt: "",
 		cwd: "",
 	},
+	// Anti-Bot-Loop (Ansatz B, concept-anti-bot-loop-filter §4/§6): leere
+	// Liste = heutiges Verhalten; gefüllt werden Kanal-Labels
+	// `gateway:<platform>:<channelId>` deterministisch als Gruppen gewertet.
+	groupRooms: [],
 	media: {
 		enabled: true,
 		rootDir: "~/.pi/runtime/media",
@@ -154,6 +158,9 @@ function mergeGatewayConfig(value: unknown): GatewayConfig {
 		...DEFAULT_CONFIG,
 		...parsed,
 		...healthConfig,
+		// groupRooms gehört unter die `...parsed`-Ebene oben; "undefined" aus
+		// dem Parsing darf nicht den Default überschreiben (JSON-Yield).
+		groupRooms: parsed.groupRooms ?? DEFAULT_CONFIG.groupRooms,
 		rpc: rpcBlock,
 		security: {
 			...DEFAULT_CONFIG.security,
@@ -260,6 +267,22 @@ function mergeGatewayConfig(value: unknown): GatewayConfig {
 			const v = (merged.rpc as Record<string, unknown>)[key];
 			if (v !== undefined && typeof v !== "string") {
 				throw new Error(`config.rpc.${key} must be a string`);
+			}
+		}
+	}
+
+	// Anti-Bot-Loop (Ansatz B): groupRooms-Validierung — Array von nicht-leeren
+	// Kanal-Labels (`gateway:<platform>:<channelId>`). Leer/fehlend = Default.
+	if (parsed.groupRooms !== undefined && parsed.groupRooms !== null) {
+		if (!Array.isArray(parsed.groupRooms)) {
+			throw new Error("config.groupRooms must be an array of channel labels");
+		}
+		for (const room of parsed.groupRooms) {
+			if (typeof room !== "string" || room.trim() === "") {
+				throw new Error(
+					"config.groupRooms contains an empty/invalid channel label " +
+						"(expected `gateway:<platform>:<channelId>`)",
+				);
 			}
 		}
 	}

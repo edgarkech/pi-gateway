@@ -550,3 +550,49 @@ describe("mergeGatewayConfig — sessions.perRoom (session-per-room §5)", () =>
 		assert.equal(DEFAULT_CONFIG.sessions.perRoom, false);
 	});
 });
+
+// Anti-Bot-Loop (concept-anti-bot-loop-filter §4/§6) — config.groupRooms:
+// Array von Kanal-Labels, Default leeres Array, Validierung non-Array/leer.
+describe("mergeGatewayConfig — groupRooms (anti-bot-loop Ansatz B)", () => {
+	it("defaults groupRooms to an empty array when absent", () => {
+		const merged = mergeGatewayConfig({ ...base } as GatewayConfig);
+		assert.deepEqual(merged.groupRooms, []);
+	});
+
+	it("accepts a valid list of channel labels", () => {
+		const merged = mergeGatewayConfig({
+			...base,
+			groupRooms: ["gateway:nextcloudTalk:room-a", "gateway:telegram:-100123456789"],
+		} as GatewayConfig);
+		assert.deepEqual(merged.groupRooms, [
+			"gateway:nextcloudTalk:room-a",
+			"gateway:telegram:-100123456789",
+		]);
+	});
+
+	it("rejects a non-array groupRooms", () => {
+		assert.throws(
+			() => mergeGatewayConfig({ ...base, groupRooms: "oops" } as GatewayConfig),
+			/config.groupRooms must be an array of channel labels/,
+		);
+	});
+
+	it("rejects empty/invalid labels inside groupRooms", () => {
+		assert.throws(
+			() =>
+				mergeGatewayConfig({
+					...base,
+					groupRooms: ["gateway:nextcloudTalk:room-a", ""],
+				} as GatewayConfig),
+			/config.groupRooms contains an empty\/invalid channel label/,
+		);
+		assert.throws(
+			() =>
+				mergeGatewayConfig({
+					...base,
+					groupRooms: ["   "],
+				} as GatewayConfig),
+			/config.groupRooms contains an empty\/invalid channel label/,
+		);
+	});
+});

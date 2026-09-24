@@ -162,6 +162,18 @@ export interface GatewayConfig {
 	};
 	/** Phase 3: File-Attachments / Media-Handling (concept §10). */
 	media?: MediaConfig;
+	/**
+	 * Anti-Bot-Loop (Ansatz B, concept-anti-bot-loop-filter §4/§6):
+	 * Liste von Kanal-Labels `gateway:<platform>:<channelId>`, die
+	 * determinstisch als Gruppen-/Kanal-Kontext behandelt werden — z. B.
+	 * Nextcloud-Talk-Räume, deren Adapter kein DM-Flag setzt. Zusammen mit
+	 * der platform-Metadaten-Erkennung (`chatType`/`isDM`/`isGroup`)
+	 * entscheidet der gateway-seitige Filter, ob eine Gruppen-Nachricht
+	 * explizit @-adressiert ist (@Igor/@all); nicht-adressierte Gruppen-
+	 * Nachrichten befragen das Modell nicht (deterministisch stumm).
+	 * Leer/fehlend = heutiges Verhalten. DM-Kanäle sind nie betroffen.
+	 */
+	groupRooms?: string[];
 	platforms: {
 		discord?: {
 			enabled: boolean;

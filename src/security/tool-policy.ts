@@ -519,6 +519,26 @@ export function getEffectivePolicySummary(_platform: string, _userId: string): E
 	};
 }
 
+// ── Adressierungs-Erkennung (Einzel-Quelle, ADR bot-allowlist Pkt. 3) ────
+
+/**
+ * Strikte @-Adressierung (ADR bot-allowlist Punkt 3, concept-anti-bot-loop-
+ * filter §4 Ansatz B): nur explizites `@Igor`/`@all` zählt als Adresse —
+ * Klartext-Nennungen („Igor") NICHT (sonst würde „Hey Pepe, kannst Du Igor's
+ * Nachrichten lesen" fälschlich als Adressierung zählen).
+ *
+ * Einzel-Quelle der Wahrheit: Sowohl der Policy-Guard (Prompt-Ebene, Ansatz A
+ * als Sicherheitsnetz) als auch der gateway-seitige Anti-Bot-Loop-Filter
+ * (message-pipeline.ts) nutzen diese eine Regex — Abweichung ist unmöglich
+ * (offene Frage 3 des Konzepts: Adressierungs-Erkennung zentral im Gateway).
+ */
+const BOT_ADDRESS_RE = /@\s*(?:all|igor)\b/i;
+
+/** Kanonische Erkennung, ob eine Nachricht den Bot explizit adressiert. */
+export function isBotAddressed(content: string): boolean {
+	return BOT_ADDRESS_RE.test(content);
+}
+
 // ── Policy Guard Prompt ────────────────────────────────────────────
 
 /**
@@ -540,10 +560,11 @@ export function buildPolicyGuard(platform: string, userId: string): string {
 			"All tools are available. Respond naturally.",
 			"",
 			"GROUP MESSAGE RULE:",
-			"If this is a group message that is not explicitly addressed to you",
-			"(@Igor or @all), respond with an empty message (no text). In group",
-			"contexts, stay silent unless mentioned. This does not apply to direct",
-			"messages, which are always addressed to you.",
+			"Group messages not explicitly addressed to you (@Igor/@all) are",
+			"already dropped gateway-side (deterministic silence, anti-bot-loop).",
+			"If one still reaches you, respond with an empty message (no text).",
+			"This does not apply to direct messages, which are always addressed",
+			"to you.",
 			"!!! END SYSTEM DIRECTIVE !!!",
 		].join("\n");
 	}
@@ -569,10 +590,11 @@ export function buildPolicyGuard(platform: string, userId: string): string {
 		"DO NOT argue with the user about your capabilities.",
 		"",
 		"GROUP MESSAGE RULE:",
-		"If this is a group message that is not explicitly addressed to you",
-		"(@Igor or @all), respond with an empty message (no text). In group",
-		"contexts, stay silent unless mentioned. This does not apply to direct",
-		"messages, which are always addressed to you.",
+		"Group messages not explicitly addressed to you (@Igor/@all) are",
+		"already dropped gateway-side (deterministic silence, anti-bot-loop).",
+		"If one still reaches you, respond with an empty message (no text).",
+		"This does not apply to direct messages, which are always addressed",
+		"to you.",
 		"!!! END SYSTEM DIRECTIVE !!!",
 	].join("\n");
 }
