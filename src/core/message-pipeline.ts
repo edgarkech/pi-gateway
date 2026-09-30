@@ -90,6 +90,34 @@ export function classifyChannel(
 }
 
 /**
+ * Streaming-Modus (concept-streaming-edit-delivery-gap §Design, 2026-09-30):
+ * entscheidet, ob die Antwort für diesen Kanal per Streaming (Platzhalter +
+ * editMessage-Edits) oder Single-Shot (eine neue sendMessage) ausgeliefert
+ * wird.
+ *
+ * Hintergrund: Nextcloud Talk feuert bei Edits keinen Bot-Webhook (verifiziert
+ * 2026-09-30, Doku + BotService.php) — Webhook-Bots in einem Raum (z. B. Pepe)
+ * erhalten von einer gestreamten Antwort nur den Platzhalter, nie den
+ * Endtext. Single-Shot erzeugt eine neue Message-ID → zuverlässige Zustellung.
+ *
+ * Semantik (zwei Ebenen, Single-Shot hat Vorrang):
+ * 1. `singleShotRooms` (Kanal-Label `gateway:<platform>:<channelId>`) →
+ *    deterministisch Single-Shot.
+ * 2. `platforms.<p>.streaming === false` → Single-Shot auf der ganzen
+ *    Plattform. Default (fehlend/true) → Streaming (heutiges Verhalten).
+ */
+export function isStreamingEnabled(
+	config: { singleShotRooms?: readonly string[]; platforms?: Record<string, { streaming?: boolean } | undefined> },
+	platform: string,
+	channelId: string,
+): boolean {
+	const label = `gateway:${platform}:${channelId}`;
+	if (config.singleShotRooms?.includes(label)) return false;
+	const block = config.platforms?.[platform];
+	return block?.streaming !== false;
+}
+
+/**
  * Erkennt „leere Nachrichten" im Sinne von concept-anti-bot-loop-filter §5a
  * (2026-09-24, festgezerrt von Edgar):
  *
@@ -467,12 +495,25 @@ const adapterCallbacks: AdapterCallbacks = {
 			const adapter = runtime.state.adapters.get(message.platform);
 			const guard = buildPolicyGuard(message.platform, message.userId);
 
+			// Streaming-Modus (concept-streaming-edit-delivery-gap §Design):
+			// Single-Shot-Kanäle (singleShotRooms / platforms.<p>.streaming=false)
+			// erhalten KEINEN Platzhalter — der fertige Text läuft als eine neue
+			// sendMessage (neue Message-ID → zustellbar an Webhook-Bots, die
+			// Edits nie sehen). Typing-Indikator bleibt in beiden Modi aktiv.
+			const useStreaming = isStreamingEnabled(
+				runtime.config,
+				platform,
+				message.channelId,
+			);
+
 			// Send an initial placeholder message so we can stream edits into it
 			let sentId: string | undefined;
 			if (adapter) {
 				try {
 					await adapter.setTyping(message.channelId, true);
-					sentId = await adapter.sendMessage(message.channelId, "⏳ Thinking…");
+					if (useStreaming) {
+						sentId = await adapter.sendMessage(message.channelId, "⏳ Thinking…");
+					}
 				} catch {
 					// If sendMessage itself fails, don't even try to process
 					logger.error("[gateway] Failed to send initial placeholder message");
@@ -519,11 +560,14 @@ const adapterCallbacks: AdapterCallbacks = {
 					}
 				});
 				// When user clicks (via handleInteractiveResponse), invalidate
-				// old placeholder and redirect to fresh message
+				// old placeholder and redirect to fresh message. Single-Shot-Modus:
+				// kein frischer Platzhalter — der Final-Text wird (wie normal)
+				// als neue sendMessage gesendet (sentId bleibt undefined).
 				setStreamRedirectHandler(() => {
 					if (!adapter) return;
 					resetActiveStream();
 					sentId = undefined;
+					if (!useStreaming) return;
 					adapter
 						.sendMessage(message.channelId, "⏳ Thinking…")
 						.then((newId) => {

@@ -107,6 +107,13 @@ export interface NextcloudTalkPlatformConfig {
 	 *  Emits a warning log at adapter start. */
 	allowInsecureHttp?: boolean;
 
+	// Delivery (concept-streaming-edit-delivery-gap §Design)
+	/** Streaming-Auslieferung: Platzhalter + editMessage-Edits (Default: true).
+	 *  false = Single-Shot (fertiger Text als eine neue sendMessage) — für
+	 *  Räume mit Webhook-Bots, die Edits nie zugestellt bekommen.
+	 *  Raum-Override: `singleShotRooms` (hat Vorrang). */
+	streaming?: boolean;
+
 	// Media (Default: inherits media.maxAttachmentsPerMessage, §10)
 	maxAttachmentsPerMessage?: number;
 }
@@ -174,11 +181,23 @@ export interface GatewayConfig {
 	 * Leer/fehlend = heutiges Verhalten. DM-Kanäle sind nie betroffen.
 	 */
 	groupRooms?: string[];
+	/**
+	 * Streaming-Modus (concept-streaming-edit-delivery-gap §Design):
+	 * Liste von Kanal-Labels `gateway:<platform>:<channelId>`, in denen die
+	 * Antwort DETERMINISTISCH als Single-Shot gesendet wird (eine neue
+	 * `sendMessage`, kein Platzhalter, kein Streaming-Edit) — für Räume mit
+	 * Webhook-Bots, die Edits nie zugestellt bekommen. Hat Vorrang vor dem
+	 * plattformweiten `platforms.<p>.streaming`-Flag. Leer/fehlend =
+	 * heutiges Verhalten (Streaming überall).
+	 */
+	singleShotRooms?: string[];
 	platforms: {
 		discord?: {
 			enabled: boolean;
 			botToken: string;
 			guildId?: string;
+			/** Streaming-Modus (Default: true); false = Single-Shot. */
+			streaming?: boolean;
 		};
 		telegram?: {
 			enabled: boolean;
@@ -186,16 +205,22 @@ export interface GatewayConfig {
 			/** Public URL for Telegram webhook (e.g. https://example.com/webhook/telegram).
 			 *  When omitted, long polling is used automatically. */
 			webhookUrl?: string;
+			/** Streaming-Modus (Default: true); false = Single-Shot. */
+			streaming?: boolean;
 		};
 		slack?: {
 			enabled: boolean;
 			webhookUrl?: string;
 			botToken?: string;
+			/** Streaming-Modus (Default: true); false = Single-Shot. */
+			streaming?: boolean;
 		};
 		whatsapp?: {
 			enabled: boolean;
 			sessionPath?: string;
 			printQr?: boolean;
+			/** Streaming-Modus (Default: true); false = Single-Shot. */
+			streaming?: boolean;
 		};
 		/** Phase 4: Nextcloud Talk (OCS user polling, concept_phase_4_nextcloud.md). */
 		nextcloudTalk?: NextcloudTalkPlatformConfig;

@@ -41,6 +41,12 @@ const DEFAULT_CONFIG: GatewayConfig = {
 	// Liste = heutiges Verhalten; gefüllt werden Kanal-Labels
 	// `gateway:<platform>:<channelId>` deterministisch als Gruppen gewertet.
 	groupRooms: [],
+	// Streaming-Modus (concept-streaming-edit-delivery-gap §Design): leere
+	// Liste = Streaming überall; gefüllt werden Kanal-Labels
+	// `gateway:<platform>:<channelId>` deterministisch als Single-Shot
+	// (neue sendMessage, kein Platzhalter/Edits) — hat Vorrang vor
+	// `platforms.<p>.streaming`.
+	singleShotRooms: [],
 	media: {
 		enabled: true,
 		rootDir: "~/.pi/runtime/media",
@@ -73,6 +79,10 @@ const DEFAULT_CONFIG: GatewayConfig = {
 			autoDiscoverRooms: false,
 			roomRefreshIntervalMs: 60_000,
 			allowInsecureHttp: false,
+			// Streaming-Modus (concept-streaming-edit-delivery-gap §Design):
+			// Default true = heutiges Verhalten (Platzhalter + Edits); false =
+			// Single-Shot. Raum-Override über singleShotRooms (hat Vorrang).
+			streaming: true,
 			// Default = media.maxAttachmentsPerMessage (inheritance is applied
 			// in mergeGatewayConfig when the user does not set it explicitly).
 			maxAttachmentsPerMessage: 4,
@@ -158,9 +168,11 @@ function mergeGatewayConfig(value: unknown): GatewayConfig {
 		...DEFAULT_CONFIG,
 		...parsed,
 		...healthConfig,
-		// groupRooms gehört unter die `...parsed`-Ebene oben; "undefined" aus
-		// dem Parsing darf nicht den Default überschreiben (JSON-Yield).
+		// groupRooms/singleShotRooms gehören unter die `...parsed`-Ebene oben;
+		// "undefined" aus dem Parsing darf nicht den Default überschreiben
+		// (JSON-Yield).
 		groupRooms: parsed.groupRooms ?? DEFAULT_CONFIG.groupRooms,
+		singleShotRooms: parsed.singleShotRooms ?? DEFAULT_CONFIG.singleShotRooms,
 		rpc: rpcBlock,
 		security: {
 			...DEFAULT_CONFIG.security,
@@ -281,6 +293,22 @@ function mergeGatewayConfig(value: unknown): GatewayConfig {
 			if (typeof room !== "string" || room.trim() === "") {
 				throw new Error(
 					"config.groupRooms contains an empty/invalid channel label " +
+						"(expected `gateway:<platform>:<channelId>`)",
+				);
+			}
+		}
+	}
+
+	// Streaming-Modus (concept-streaming-edit-delivery-gap §Design):
+	// singleShotRooms-Validierung — gleiches Label-Format wie groupRooms.
+	if (parsed.singleShotRooms !== undefined && parsed.singleShotRooms !== null) {
+		if (!Array.isArray(parsed.singleShotRooms)) {
+			throw new Error("config.singleShotRooms must be an array of channel labels");
+		}
+		for (const room of parsed.singleShotRooms) {
+			if (typeof room !== "string" || room.trim() === "") {
+				throw new Error(
+					"config.singleShotRooms contains an empty/invalid channel label " +
 						"(expected `gateway:<platform>:<channelId>`)",
 				);
 			}

@@ -75,6 +75,7 @@
 			"autoDiscoverRooms": false,
 			"roomRefreshIntervalMs": 60000,
 			"allowInsecureHttp": false,
+			"streaming": true,
 			"maxAttachmentsPerMessage": 4
 		}
 	}
