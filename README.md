@@ -2,7 +2,7 @@
 
 Multi-platform chat bridge for pi — connect your AI agent to Discord, Telegram, Slack, WhatsApp, Nextcloud Talk, WebSocket, and the web. Real-time streaming, per-chat sessions, role-based access control, and a hardened security layer.
 
-> Fork of [0xKobold/pi-gateway](https://github.com/0xKobold/pi-gateway), carried forward through [gamalan/pi-gateway](https://github.com/gamalan/pi-gateway) and refactored into a modular architecture with config-based UID allowlisting, a pairing flow, and per-user/per-platform rate limiting. See [LICENSE](LICENSE) for the copyright chain.
+> Fork of [0xKobold/pi-gateway](https://github.com/0xKobold/pi-gateway), carried forward through [gamalan/pi-gateway](https://github.com/gamalan/pi-gateway) and refactored into a modular architecture with config-based UID allowlisting, a pairing flow, and per-user rate limiting. See [LICENSE](LICENSE) for the copyright chain.
 
 ## Architecture
 
@@ -50,7 +50,7 @@ Key design principles:
 - **Real-time streaming** — responses appear token-by-token via live message editing
 - **Per-chat sessions** — isolated conversations with configurable reset policies (daily / idle)
 - **Background tasks** — spawn async work from chats, results delivered when ready
-- **Security layer** — allowlists, admin roles, pairing flow, per-user/platform rate limiting, configurable tool policies
+- **Security layer** — allowlists, admin roles, pairing flow, per-user rate limiting, configurable tool policies
 - **Detached daemon mode** — `/gateway start -d` or `pi-gateway start -d` keeps the gateway alive after pi closes
 - **HTTP + WebSocket API** — connect external clients, send prompts, receive streaming responses
 - **pi-native** — runs as a pi extension with `/gateway` slash commands and registered tools
@@ -64,9 +64,17 @@ Requires pi coding agent (`@earendil-works/pi-coding-agent >= 0.80.3`) and `@sin
 ```bash
 git clone https://github.com/edgarkech/pi-gateway.git
 cd pi-gateway
-npm install
+npm install --force
 ./scripts/deploy.sh install --seed-config --with-service
 ```
+
+> **Note (npm ≥ 10.9):** plain `npm install` can abort with the arborist error
+> `Cannot read properties of null (reading 'edgesOut')` — a peer-dependency tree
+> bug in npm itself (triggered by the vitest 4 peer set). Workaround:
+> `npm install --force`. Without it, the peer dependencies
+> (`@earendil-works/pi-coding-agent`, `@sinclair/typebox`) are not installed and
+> `npm run build` fails with TS2307. The committed `package-lock.json` keeps the
+> runtime's `npm ci` reproducible.
 
 **Manual (equivalent to the script):**
 
@@ -204,7 +212,7 @@ The security layer (`src/security/`) enforces, in order, rate limiting, the allo
 
 ### Rate Limiting
 
-Per-user **and** per-platform. When a user exceeds `security.rateLimit.maxRequests` within `security.rateLimit.windowMs`, further messages are blocked with a "too quickly" notice. Configured via the `security.rateLimit` block in `config.json` (defaults: 60 requests / 60000 ms).
+Per-user (keyed by `platform:userId`). When a user exceeds `security.rateLimit.maxRequests` within `security.rateLimit.windowMs`, further messages are blocked with a "too quickly" notice. Configured via the `security.rateLimit` block in `config.json` (defaults: 60 requests / 60000 ms).
 
 ### Allowlist (DB)
 

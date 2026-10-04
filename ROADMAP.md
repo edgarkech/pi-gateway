@@ -52,15 +52,29 @@ A robust, modular channel adapter for the pi coding agent — reliable communica
 
 ---
 
-## 🔵 Open Items
+## 🎬 Next Up
 
-- [ ] **Nextcloud Talk file sharing with a real client** — the client-side file share format is covered by mock/E2E harness so far; verify against a production Nextcloud client.
-- [ ] **Session-per-Room live verification** — implemented and tested (mock level); verify with a live message series à la QED-Test (3 rooms, overlapping → 3 pi session files, no rejections), then enable `sessions.perRoom` in production config.
-- [ ] **TUI status flapping** — cosmetic flicker of the status footer in idle mode (RPC timing); generation counter exists, test invariant missing.
-- [ ] **SIGHUP-based config reload** — config-file watching already triggers an adapter restart; explicit SIGHUP signal path not implemented.
-- [ ] **Slash commands over channels** — currently out of scope: the anti-loop filter drops Talk slash-commands (`messageType=command`); gateway meta-commands run as plain text messages. Decision on real Talk slash-command support pending.
-- [ ] **Slack inbound** — receiving messages from Slack (outbound only today), planned for a later phase.
+- [ ] **Slash commands over channels** — the next major feature; **specify first, implement second**. Current state: the anti-loop filter drops Talk slash-commands (`messageType=command`); gateway meta-commands run as plain text messages. Open spec questions: command syntax per platform, permission model (admin vs. regular user), interaction with the tool-policy layer, and how `/gateway` meta-commands map onto native platform slash-command registries.
 
 ---
 
-*Last updated: 2026-09-17*
+## 🔵 Open Items (prioritized)
+
+- [ ] **Nextcloud Talk file sharing with a real client** — the client-side file share format is covered by mock/E2E harness so far; verify against a production Nextcloud client.
+- [ ] **Session-per-Room live verification** — implemented and tested (mock level); verify with a live message series à la QED-Test (3 rooms, overlapping → 3 pi session files, no rejections), then enable `sessions.perRoom` in production config.
+- [ ] **No streaming in bot groups** — in group chats where other (allowed) bots are present, streaming edits (`editMessage` on the "⏳ Thinking…" placeholder) should be disabled: every edit is a new room event and can trigger the other bots. Decide on a per-room/per-group switch (e.g. via `groupRooms` labels) and send the final message in one piece instead.
+- [ ] **Telegram offset not persisted** — the long-poll offset lives in memory only. Two effects: (1) within a run, a failed `handleUpdate` loses the message (at-most-once); (2) after a gateway restart, Telegram re-delivers unacknowledged updates (~24 h window) and the pipeline has no dedup by `message_id` → the same message can be processed twice. Mitigation: persist the offset (e.g. in the sessions DB) and/or dedup recent `message_id`s.
+- [ ] **HTML/markdown formatting mismatch** (issue #1) — channel meta-messages use markdown-style markup (`*bold*`, backticks) but the Telegram adapter sends with `parse_mode: HTML`, so the markers render literally. Align formatting conventions across pipeline messages and adapters.
+- [ ] **TUI status flapping** — cosmetic flicker of the status footer in idle mode (RPC timing); generation counter exists, test invariant missing.
+- [ ] **SIGHUP-based config reload** — config-file watching already triggers an adapter restart; explicit SIGHUP signal path not implemented.
+- [ ] **Telegram webhook secret verification** — `webhookSecret` is passed to Telegram (`secret_token`) but the incoming `X-Telegram-Bot-Api-Secret-Token` header is never verified ("Verify secret here"). Deferred: webhook mode is not in use (long polling is primary); implement when webhook mode is actually needed.
+
+---
+
+## ⏸️ Deferred (no current priority)
+
+- [ ] **Slack inbound** — receiving messages from Slack (outbound only today). Explicitly deprioritized (2026-10-04): parked at the very back until the items above are done.
+
+---
+
+*Last updated: 2026-10-04*
