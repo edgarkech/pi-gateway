@@ -28,7 +28,8 @@
 ```bash
 git clone https://github.com/edgarkech/pi-gateway.git
 cd pi-gateway
-npm install
+npm install --force    # npm >= 10.9: plain `npm install` can hit the arborist
+                       # peer-dep bug ("edgesOut") — see README, Installation
 ./scripts/deploy.sh install --seed-config --with-service
 ```
 
@@ -41,7 +42,8 @@ export PATH="<your-node-dir>:$PATH"    # e.g. ~/.local/share/pi-node/node-<ver>-
 # 2. Fill the runtime directory (source = project)
 mkdir -p ~/.pi/runtime/pi-gateway
 cd pi-gateway                           # the cloned project directory
-npm install                             # incl. native dep (better-sqlite3)
+npm install --force                     # incl. native dep (better-sqlite3);
+                                        # --force: npm >= 10.9 arborist peer-dep bug
 npm run build                           # -> dist/
 rsync -a dist/ src/ config/ package.json package-lock.json ~/.pi/runtime/pi-gateway/
 cd ~/.pi/runtime/pi-gateway

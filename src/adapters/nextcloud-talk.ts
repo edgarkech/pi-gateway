@@ -52,6 +52,7 @@ import { initTalkStateStore, shutdownTalkStateStore } from "./nextcloud/store.js
 import type { TalkChatMessage, TalkRichObject, TalkRoom } from "./nextcloud/talk-types.js";
 import { logger } from "../logger.js";
 import { runtime } from "../state.js";
+import { isKnownChannelCommandText } from "../core/channel-commands.js";
 import { MediaError, type MediaAttachment, type MediaKind } from "../media/types.js";
 import { initMediaManager } from "../media/manager.js";
 
@@ -104,6 +105,10 @@ export interface NextcloudTalkConfig extends PlatformConfig {
 
 	// Security
 	allowInsecureHttp?: boolean;
+	/** Slash Commands (docs/slash-commands.md §2): Raum-Token → "groupHuman"|
+	 *  "groupBot". Der Adapter selbst konsumiert das Feld nicht — die Pipeline
+	 *  liest es direkt aus runtime.config; hier nur für Config-Parität. */
+	roomTypes?: Record<string, "groupHuman" | "groupBot">;
 
 	// Media (Default: media.maxAttachmentsPerMessage aus Konzept §10)
 	maxAttachmentsPerMessage?: number;
@@ -149,9 +154,14 @@ const MEDIA_OBJECT_TYPES = new Set(["file", "media", "audio", "video", "voice", 
  * | `actorType === "bots"` (in allowedBots)      | **publishable** (2026-09-20, supervised bot-to-bot talk) |
  * | `actorId === config.userId` (eigene)   | verwerfen   |
  * | `systemMessage !== ""` (System-Event)  | verwerfen   |
- * | `messageType === "command"` (MVP)      | verwerfen   |
+ * | `messageType === "command"` + unbekanntes Command | verwerfen   |
+ * | `messageType === "command"` + bekanntes Slash-Command (`/stop`,`/new`,`/status`,`/model`) | **publishable** (docs/slash-commands.md §5) |
  * | `messageType === "comment_deleted"`    | verwerfen   |
  * | sonst (echter User-Text/Datei-Sharing) | **publishable** |
+ *
+ * Anti-Loop-Invariante (D4) bleibt erhalten: eigene Bot-News (Selbst-Filter),
+ * System-Events und fremde Bots werden weiterhin unabhängig vom Typ verworfen,
+ * und UNSICHERE/Unbekannte `command`-Messages bleiben komplett zu.
  */
 export function isPublishable(config: NextcloudTalkConfig, msg: TalkChatMessage): boolean {
 	if (msg.actorType === "bots") {
@@ -161,7 +171,15 @@ export function isPublishable(config: NextcloudTalkConfig, msg: TalkChatMessage)
 	}
 	if (config.userId !== "" && msg.actorId === config.userId) return false;
 	if (msg.systemMessage !== "") return false;
-	if (msg.messageType === "command") return false;
+	if (msg.messageType === "command") {
+		// docs/slash-commands.md §5: Filter selektiv für das bekannte
+		// Slash-Command-Set öffnen (Talk liefert user-getippte `/…`-Befehle als
+		// messageType "command"). Alle anderen Talk-Commands bleiben verworfen
+		// (Anti-Loop-Invariante). Die nachfolgenden Filter (Selbst/System/Bot)
+		// laufen weiterhin zuerst — Bot-eigene Command-Echos werden also nie
+		// reingelassen.
+		if (!isKnownChannelCommandText(msg.message)) return false;
+	}
 	if (msg.messageType === "comment_deleted") return false;
 	return true;
 }

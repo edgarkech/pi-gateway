@@ -43,6 +43,20 @@ export interface MediaConfig {
 }
 
 /**
+ * Slash Commands (docs/slash-commands.md §2) — Raum-Klassifikation für die
+ * Konfigurations-Seite `platforms.nextcloudTalk.roomTypes`.
+ *
+ * - `groupHuman`: von Menschen bevölkerter Gruppenraum (Default für
+ *   unklassifizierte Gruppenräume — konservativ).
+ * - `groupBot`: Bot-Raum; es werden dort KEINE Slash-Commands verarbeitet
+ *   (Command-Texte laufen als normale Nachrichten durch die Pipeline).
+ *
+ * DMs brauchen keinen Eintrag — sie sind implizit über die vorhandene
+ * Raumtyp-Erkennung (`dm`/`group`/`unknown`) abgedeckt.
+ */
+export type TalkRoomType = "groupHuman" | "groupBot";
+
+/**
  * Phase 4 (Nextcloud Talk) — platform configuration block.
  *
  * Mirrors the `platforms.nextcloudTalk` schema of
@@ -113,6 +127,14 @@ export interface NextcloudTalkPlatformConfig {
 	 *  Räume mit Webhook-Bots, die Edits nie zugestellt bekommen.
 	 *  Raum-Override: `singleShotRooms` (hat Vorrang). */
 	streaming?: boolean;
+
+	// Slash Commands (docs/slash-commands.md §2)
+	/** Explizite Raum-Klassifikation für die Slash-Command-Raumtyp-Gating:
+	 *  Key = Talk-Raum-Token (= PlatformMessage.channelId), Value =
+	 *  `groupHuman` | `groupBot`. Konfigurations-getrieben OHNE Auto-
+	 *  Erkennung; unklassifizierte Gruppenräume gelten konservativ als
+	 *  `groupHuman`. DMs brauchen keinen Eintrag. */
+	roomTypes?: Record<string, TalkRoomType>;
 
 	// Media (Default: inherits media.maxAttachmentsPerMessage, §10)
 	maxAttachmentsPerMessage?: number;

@@ -41,8 +41,9 @@ Two cooperating layers:
 | `server.ts` | HTTP + WebSocket server, API auth (Bearer tokens), cron-ish housekeeping |
 | `rpc.ts` | Spawns the single pi RPC process; multiplexes prompts, streaming deltas (`message_update`) and completions (`agent_end`) by `sessionId`; per-room session primitives (`get_state`/`new_session`/`switch_session`/`set_session_name`, busy tracking over `agent_start`/`agent_settled`); abort/restart of the shared process |
 | `prompt-queue.ts` | Global FIFO prompt queue for Session-per-Room: queues overlapping prompts while the agent is busy, drains on `agent_settled`, per-entry timeout (`promptTimeoutMs`) |
-| `message-pipeline.ts` | The inbound path (see §5): media ingest → rate limit → allowlist/pairing → model commands → channel classification (group/DM) → anti-bot-loop filters → tool-policy directive → session resolution → RPC prompt |
-| `commands.ts` | The `/gateway` slash-command handler (status, allow, pair, admin, tool-policy, sessions, tasks, config) |
+| `message-pipeline.ts` | The inbound path (see §5): media ingest → rate limit → allowlist/pairing → channel classification (group/DM + roomTypes) → channel slash-command gating → anti-bot-loop filters → tool-policy directive → session resolution → RPC prompt |
+| `channel-commands.ts` | Pure logic layer for channel slash commands (docs/slash-commands.md): first-token parsing, room-type resolution (config > implicit, default `groupHuman`), the admin × room-type permission matrix, Talk filter selector, status/model report helpers |
+| `commands.ts` | The TUI `/gateway` slash-command handler (status, allow, pair, admin, tool-policy, sessions, tasks, config) — channel slash commands are a separate feature (`channel-commands.ts`) |
 | `tools.ts` | The 5 registered tools: `gateway_status`, `gateway_sessions`, `gateway_background_tasks`, `gateway_pairing`, `gateway_tool_policy` |
 | `daemon.ts` | Detached daemon lifecycle; config watcher (file change → adapter restart); deterministic shutdown sequence: `stopAdapters → shutdownTalkStateStore → shutdownMediaManager` |
 | `status-footer.ts` | pi footer sync (🟢 Gateway (daemon) indicator, generation counter against flapping) |
@@ -82,8 +83,9 @@ adapter.onMessage
   → media ingest (attachments → download → magic-byte validation → local path)
   → rate limiting (per user + per platform, sliding window)
   → allowlist / pairing (DB allowlist, config pre-approved UIDs, pairing codes)
-  → admin/model commands (/model, /restart — handled without the model)
-  → channel classification (classifyChannel: groupRooms labels + platform metadata → dm | group | unknown)
+  → channel classification (classifyChannel: groupRooms labels + platform metadata → dm | group | unknown; refined to groupHuman | groupBot via platforms.nextcloudTalk.roomTypes config)
+  → channel slash-command gating (/stop /new /status /model — admin + room-type matrix, docs/slash-commands.md; ack/execute stop the pipeline, groupBot rooms forward the text as a normal message)
+  → legacy Telegram model-switch callback (inline keyboard from the old /model flow)
   → anti-bot-loop filters (group + not addressed → silent, no model call; empty message → ignored globally; @Igor/@all overrides both)
   → tool-policy directive (read-only baseline, prepended to the prompt)
   → session resolution (getOrCreateSession → sessionId-tagged RPC prompt)

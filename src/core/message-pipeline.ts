@@ -32,6 +32,15 @@ import {
 	setPiSessionName,
 } from "./rpc.js";
 import { enqueuePromptTask } from "./prompt-queue.js";
+import {
+	decideChannelCommand,
+	resolveRoomType,
+	formatChannelStatus,
+	formatContextUsage,
+	formatModelId,
+	parseModelArg,
+	type CommandDecision,
+} from "./channel-commands.js";
 import { updateStatus } from "./status-footer.js";
 import { isDaemonMode } from "./daemon.js";
 import {
@@ -212,11 +221,63 @@ const adapterCallbacks: AdapterCallbacks = {
 		// Store session reference
 		runtime.state.sessions.set(`${message.platform}:${message.channelId}`, session);
 
-		// ── Admin/allowed model commands ──
-		const modelMatch = message.content.match(/^\/model(?:\s+(.+))?/i);
-		const modelCallback = message.content.match(/^Callback:\s*model:(.+)/i);
+		// ── Raum-Klassifikation (einmal pro Nachricht) ─────────────────────
+		// Dient zwei Konsumenten: dem zentralen Slash-Command-Gating
+		// (docs/slash-commands.md §2/§4) und dem Anti-Bot-Loop-Gruppen-Filter
+		// (anti-bot-loop §4/§6, unten). DM/Gruppe/unklar aus classifyChannel;
+		// die Verfeinerung groupHuman/groupBot kommt für Talk zusätzlich aus
+		// der Konfiguration (platforms.nextcloudTalk.roomTypes, Spec §2:
+		// configuration-driven only — keine Auto-Erkennung, da Bots bewusst
+		// als normale Accounts angelegt sein können).
+		const groupRooms = runtime.config.groupRooms ?? [];
+		const channelKind = classifyChannel(platform, message, groupRooms);
+		const roomType = resolveRoomType(
+			message.channelId,
+			channelKind,
+			message.platform === "nextcloudTalk"
+				? runtime.config.platforms.nextcloudTalk?.roomTypes
+				: undefined,
+		);
 
-		if ((modelMatch || modelCallback) && isUserAllowed(platform, message.userId)) {
+		// ── Channel-Slash-Commands: /stop /new /status /model (Spec §§2–§7) ──
+		// Zentrales Parsing VOR der Agent-Übergabe, plattform-agnostisch
+		// (docs/slash-commands.md §§3–§5):
+		// - not-command → Nachricht fließt unverändert weiter (Spec §5).
+		// - forward     → groupBot-Raum: KEINE Command-Verarbeitung, KEINE
+		//   Quittung; der Text läuft als normale Nachricht zum Agenten, denn
+		//   Output in Bot-Gruppen wäre ein Event für die anderen Bots (Spec §4).
+		// - ack         → ablehnen mit Kurz-Quittung, NICHT an den Agenten
+		//   (Nicht-Admin, Spec §4 Option A; oder Raum-Gating der Matrix).
+		// - execute     → kuratiertes Command sicher ausgeführt.
+		const commandDecision = decideChannelCommand({
+			content: message.content,
+			isAdmin: isAdmin(platform, message.userId),
+			roomType,
+		});
+		if (commandDecision.kind === "ack") {
+			await discardMediaAttachments(message.attachments);
+			const adapter = runtime.state.adapters.get(message.platform);
+			// Bots erhalten keine Command-Quittungen: jeder gesendete Text im
+			// Bot-Kontext wäre neuer Loop-Auslösestoff (Anti-Bot-Loop-Lehre;
+			// Spec §4 verbietet Output in Bot-Gruppen erst recht).
+			if (adapter && actorType !== "bots") {
+				await adapter.sendMessage(message.channelId, commandDecision.text);
+			}
+			logger.info(
+				`[gateway] Channel command "${message.content.trim()}" denied for ${message.platform}/${message.userId} (roomType: ${roomType})`,
+			);
+			return;
+		}
+		if (commandDecision.kind === "execute") {
+			await executeChannelCommand(commandDecision, platform, message, session);
+			return;
+		}
+
+		// ── Telegram inline-keyboard callback for model switching ──
+		// Kein Slash-Command (Tastendruck-Callback des alten /model-Keyboards),
+		// daher bewusst NACH dem Command-Dispatch; Logik unverändert übernommen.
+		const modelCallback = message.content.match(/^Callback:\s*model:(.+)/i);
+		if (modelCallback && isUserAllowed(platform, message.userId)) {
 			const adapter = runtime.state.adapters.get(message.platform);
 			if (!isAgentRunning()) {
 				if (adapter) {
@@ -225,140 +286,16 @@ const adapterCallbacks: AdapterCallbacks = {
 				return;
 			}
 
-			// Handle callback from inline keyboard
-			if (modelCallback) {
-				const key = modelCallback[1].trim();
-				const [provider, modelId] = key.split("/");
-				if (!provider || !modelId) return;
+			const key = modelCallback[1].trim();
+			const [callbackProvider, callbackModelId] = key.split("/");
+			if (!callbackProvider || !callbackModelId) return;
 
-				// Only admins can actually switch models
-				if (!isAdmin(platform, message.userId)) {
-					if (adapter) {
-						await adapter.sendMessage(
-							message.channelId,
-							"Only admins can switch models.",
-						);
-					}
-					return;
-				}
-
-				try {
-					const result = (await sendRpc("set_model", {
-						provider,
-						modelId,
-					})) as {
-						success: boolean;
-						error?: string;
-						data?: { name: string };
-					};
-					if (result.success) {
-						const name = result.data?.name || `${provider}/${modelId}`;
-						if (adapter) {
-							await adapter.sendMessage(
-								message.channelId,
-								`✅ Model changed to ${name}`,
-							);
-						}
-						logger.info(
-							`[gateway] Admin ${message.userId} switched model to ${provider}/${modelId}`,
-						);
-					} else {
-						if (adapter) {
-							await adapter.sendMessage(
-								message.channelId,
-								`❌ Failed: ${result.error || "unknown"}`,
-							);
-						}
-					}
-				} catch (err) {
-					logger.error("[gateway] Model switch failed:", err);
-				}
-				return;
-			}
-
-			const arg = (modelMatch?.[1] || "").trim().toLowerCase();
-
-			// /model (no args) or /model list → show available models
-			if (!arg || arg === "list") {
-				try {
-					const result = (await sendRpc("get_available_models")) as {
-						success: boolean;
-						data?: {
-							models: Array<{
-								provider: string;
-								id: string;
-								name: string;
-							}>;
-						};
-					};
-					if (result.success && result.data) {
-						const models = result.data.models;
-
-						// Try inline keyboard for Telegram
-						const telegram = adapter as unknown as {
-							sendButtons?: (
-								ch: string,
-								text: string,
-								btns: Array<Array<{ text: string; data: string }>>,
-							) => Promise<string>;
-						};
-						if (telegram?.sendButtons) {
-							const buttons = models.map((m) => [
-								{
-									text: `${m.name} (${m.provider})`,
-									data: `model:${m.provider}/${m.id}`,
-								},
-							]);
-							await telegram.sendButtons(
-								message.channelId,
-								"<b>Available models</b>\nTap to switch:",
-								buttons,
-							);
-						} else if (adapter) {
-							// Text fallback
-							const list = models
-								.map((m) => `• ${m.provider}/${m.id} — ${m.name}`)
-								.join("\n");
-							await adapter.sendMessage(
-								message.channelId,
-								`Available models:\n${list}\n\nUse \`/model provider/id\` to switch.`,
-							);
-						}
-					} else if (adapter) {
-						await adapter.sendMessage(
-							message.channelId,
-							"Could not retrieve model list.",
-						);
-					}
-				} catch (err) {
-					logger.error("[gateway] Failed to list models:", err);
-					if (adapter) {
-						await adapter.sendMessage(
-							message.channelId,
-							"Failed to retrieve model list.",
-						);
-					}
-				}
-				return;
-			}
-
-			// /model provider/modelId — only admins can switch
+			// Only admins can actually switch models
 			if (!isAdmin(platform, message.userId)) {
 				if (adapter) {
 					await adapter.sendMessage(
 						message.channelId,
-						"Only admins can switch models. Use `/model` to see available models.",
-					);
-				}
-				return;
-			}
-
-			const [provider, modelId] = arg.split("/");
-			if (!provider || !modelId) {
-				if (adapter) {
-					await adapter.sendMessage(
-						message.channelId,
-						"Usage: `/model provider/modelId`\n`/model` to see available models.",
+						"Only admins can switch models.",
 					);
 				}
 				return;
@@ -366,16 +303,20 @@ const adapterCallbacks: AdapterCallbacks = {
 
 			try {
 				const result = (await sendRpc("set_model", {
-					provider,
-					modelId,
-				})) as { success: boolean; error?: string; data?: { name: string } };
+					provider: callbackProvider,
+					modelId: callbackModelId,
+				})) as {
+					success: boolean;
+					error?: string;
+					data?: { name: string };
+				};
 				if (result.success) {
-					const name = result.data?.name || `${provider}/${modelId}`;
+					const name = result.data?.name || `${callbackProvider}/${callbackModelId}`;
 					if (adapter) {
 						await adapter.sendMessage(message.channelId, `✅ Model changed to ${name}`);
 					}
 					logger.info(
-						`[gateway] Admin ${message.userId} switched model to ${provider}/${modelId}`,
+						`[gateway] Admin ${message.userId} switched model to ${callbackProvider}/${callbackModelId}`,
 					);
 				} else {
 					if (adapter) {
@@ -386,10 +327,7 @@ const adapterCallbacks: AdapterCallbacks = {
 					}
 				}
 			} catch (err) {
-				logger.error("[gateway] Failed to change model:", err);
-				if (adapter) {
-					await adapter.sendMessage(message.channelId, "Failed to change model.");
-				}
+				logger.error("[gateway] Model switch failed:", err);
 			}
 			return;
 		}
@@ -425,37 +363,6 @@ const adapterCallbacks: AdapterCallbacks = {
 			}
 		}
 
-		// ── Meta Commands: /new, /status ──
-		const newMatch = message.content.match(/^\/new$/i);
-		const statusMatch = message.content.match(/^\/status$/i);
-
-		if (newMatch || statusMatch) {
-			const adapter = runtime.state.adapters.get(message.platform);
-			if (!adapter) return;
-
-			if (newMatch) {
-				await deleteSession(session.id);
-				await adapter.sendMessage(
-					message.channelId,
-					"🆕 *Neue Session gestartet.*\nDer bisherige Kontext wurde gelöscht.",
-				);
-				return;
-			}
-
-			if (statusMatch) {
-				const date = new Date(session.createdAt).toLocaleString("de-DE");
-				const lastAct = new Date(session.lastActivity).toLocaleTimeString("de-DE");
-				const statusMsg =
-					`📊 *Session Status*\n\n` +
-					`🆔 ID: \`${session.id}\`\n` +
-					`📱 Plattform: ${session.platform}\n` +
-					`📅 Erstellt: ${date}\n` +
-					`🕒 Letzte Aktivität: ${lastAct}`;
-				await adapter.sendMessage(message.channelId, statusMsg);
-				return;
-			}
-		}
-
 		// ── Anti-Bot-Loop (Ansatz B, Leer-Nachrichten-Filter — §5a 2026-09-24) ──
 		// Leere Nachrichten (Länge 0 bzw. Länge 1 mit nicht-alphanumerischem
 		// Zeichen außer ?/!) sind gültiger Loop-Auslösestoff: sie werden bisher
@@ -480,8 +387,8 @@ const adapterCallbacks: AdapterCallbacks = {
 		// der Filter greift nur, wenn der Kanal positiv als Gruppe erkannt
 		// wird (platform-Metadaten `chatType`/`isDM`/`isGroup` oder explizite
 		// `groupRooms`-Labels). Konzept §§3/4, ADR bot-allowlist Pkt. 3.
-		const groupRooms = runtime.config.groupRooms ?? [];
-		const channelKind = classifyChannel(platform, message, groupRooms);
+		// `groupRooms`/`channelKind` wurden bereits für das Command-Gating
+		// berechnet (siehe „Raum-Klassifikation" oben) — hier nur Konsum.
 		if (channelKind === "group" && !isBotAddressed(message.content)) {
 			logger.info(
 				`[gateway] Group message not addressed to bot (@Igor/@all) in ${platform}/${message.channelId} — staying silent (anti-bot-loop)`,
@@ -860,4 +767,259 @@ export async function assemblePromptWithAttachments(
 
 	const promptText = [args.guard, manifest, userPart].filter(Boolean).join("\n\n");
 	return { promptText, images };
+}
+
+// ── Channel-Slash-Command-Ausführung (docs/slash-commands.md §§3–§7) ───────
+// Decision + Parsing liegen in src/core/channel-commands.ts (pure, unit-test-
+// bar); hier laufen ausschließlich die Seiteneffekte (RPC, Adapter-Sends).
+
+/** Minimaler Response-Schnitt pi-RPC (Erfolgsflag + optionale Fehlerzeile). */
+interface RpcCallResult {
+	success: boolean;
+	error?: string;
+}
+
+/** pi-Model-Objekt-Snapshot aus get_state/set_model (nur Anzeige-Felder). */
+interface RpcModelInfo {
+	provider?: string;
+	id?: string;
+	name?: string;
+}
+
+/**
+ * Führt ein per Permission-Matrix freigegebenes Slash-Command aus
+ * (docs/slash-commands.md §3). Vorbedingungen (Admin + Raumtyp-Matrix) sind
+ * vom Aufrufer via `decideChannelCommand` geprüft — diese Funktion verlässt
+ * sich darauf und ergänzt keine Berechtigungslogik.
+ */
+async function executeChannelCommand(
+	decision: Extract<CommandDecision, { kind: "execute" }>,
+	platform: Platform,
+	message: PlatformMessage,
+	session: { id: string },
+): Promise<void> {
+	const adapter = runtime.state.adapters.get(message.platform);
+	const reply = async (text: string): Promise<void> => {
+		if (!adapter) return;
+		try {
+			await adapter.sendMessage(message.channelId, text);
+		} catch (err) {
+			logger.error("[gateway] Failed to send command reply:", err);
+		}
+	};
+	// Commands konsumieren keine Anhänge — wie bei allen Verwerfungspfaden
+	// best-effort discarden, damit keine Orphan-Dateien im Media-Store bleiben.
+	await discardMediaAttachments(message.attachments);
+
+	logger.info(
+		`[gateway] Channel command /${decision.command} from ${platform}/${message.userId} in room ${message.channelId} (roomType: ${decision.roomType})`,
+	);
+
+	switch (decision.command) {
+		case "stop": {
+			// §3: aktuelle Generierung für diesen Raum abbrechen, Session bleibt.
+			if (!isAgentRunning()) {
+				await reply("🛑 Agent not running — nothing to stop.");
+				return;
+			}
+			try {
+				// pi-RPC-Doku (rpc-commands.md, abort): abort setzt queued
+				// steering/follow-up-Nachrichten fort — für „Esc“-Semantik erst
+				// clear_queue, dann abort. clear_queue ist best-effort (fehler
+				// darf den abort nicht verhindern).
+				await sendRpc("clear_queue").catch(() => undefined);
+				const res = (await sendRpc("abort")) as RpcCallResult;
+				if (res.success) {
+					await reply("⏹ Current generation stopped — session kept.");
+				} else {
+					await reply(`❌ Stop failed: ${res.error || "unknown"}`);
+				}
+			} catch (err) {
+				logger.error("[gateway] /stop failed:", err);
+				await reply("❌ Stop failed.");
+			}
+			return;
+		}
+
+		case "new": {
+			// §3: Session für diesen Raum zurücksetzen. deleteSession entfernt
+			// den Gateway-Session-Satz inkl. piSessionFile-Mapping — beim
+			// nächsten Message legt die Per-Room-Logik eine frische pi-Session
+			// an (docs/session-per-room.md). Der RPC-Prozess selbst bleibt.
+			try {
+				await deleteSession(session.id);
+				await reply(
+					"🆕 *Neue Session gestartet.*\nDer bisherige Kontext wurde gelöscht.",
+				);
+			} catch (err) {
+				logger.error("[gateway] /new failed:", err);
+				await reply("❌ Session reset failed.");
+			}
+			return;
+		}
+
+		case "status": {
+			// §6: kompakter Health-Report — Agent, Adapter, Modell, Kontext.
+			// Modell + Kontext aus dem pi-RPC; fehlt beides (Agent weg oder
+			// RPC liefert nicht), ehrlicher Config-/n/a-Fallback (Spec §6).
+			const agentConnected = isAgentRunning();
+			const adapters = Array.from(runtime.state.adapters.keys());
+			let model: string | null = null;
+			let modelSource: "rpc" | "config" | undefined;
+			let contextUsage: string | null = null;
+			if (agentConnected) {
+				try {
+					const state = (await sendRpc("get_state")) as RpcCallResult & {
+						data?: { model?: RpcModelInfo };
+					};
+					if (state.success && state.data?.model?.id) {
+						model = formatModelId(state.data.model);
+						modelSource = "rpc";
+					}
+				} catch (err) {
+					logger.warn("[gateway] /status: get_state failed:", err);
+				}
+				try {
+					const stats = (await sendRpc("get_session_stats")) as RpcCallResult & {
+						data?: {
+							contextUsage?: {
+								tokens?: number | null;
+								contextWindow?: number | null;
+								percent?: number | null;
+							};
+						};
+					};
+					const usage = stats.success ? stats.data?.contextUsage : undefined;
+					if (usage?.contextWindow) {
+						contextUsage = formatContextUsage({
+							tokens: usage.tokens ?? null,
+							contextWindow: usage.contextWindow,
+							percent: usage.percent ?? null,
+						});
+					}
+				} catch (err) {
+					logger.warn("[gateway] /status: get_session_stats failed:", err);
+				}
+			}
+			if (model === null) {
+				const configured = runtime.config.rpc?.model?.trim();
+				if (configured && configured !== "") {
+					model = configured;
+					modelSource = "config";
+				}
+			}
+			await reply(
+				formatChannelStatus({ agentConnected, adapters, model, modelSource, contextUsage }),
+			);
+			return;
+		}
+
+		case "model": {
+			// §7: ohne Argument aktives Modell zeigen, mit Argument switchen
+			// (pi-RPC unterstützt Runtime-Switch via set_model — verifiziert
+			// gegen rpc-commands.md).
+			if (!isAgentRunning()) {
+				await reply("Agent not running.");
+				return;
+			}
+			const target = parseModelArg(decision.arg);
+			if (!target) {
+				// /model ohne Argument → aktueller Modell-Identifier.
+				try {
+					const state = (await sendRpc("get_state")) as RpcCallResult & {
+						data?: { model?: RpcModelInfo };
+					};
+					if (state.success && state.data?.model?.id) {
+						await reply(`🧠 Current model: ${formatModelId(state.data.model)}`);
+					} else {
+						const configured = runtime.config.rpc?.model?.trim();
+						await reply(
+							configured
+								? `🧠 Current model: ${configured} (from config — RPC did not report a model)`
+								: "🧠 Current model: n/a (RPC did not report a model)",
+						);
+					}
+				} catch (err) {
+					logger.error("[gateway] /model: get_state failed:", err);
+					await reply("Failed to retrieve current model.");
+				}
+				return;
+			}
+
+			// /model list → verfügbare Modelle (Textliste; plattform-agnostisch,
+			// Telegram-Keyboards bleiben dem Callback-Pfad oben vorbehalten).
+			if (target.provider === null && target.modelId.toLowerCase() === "list") {
+				try {
+					const result = (await sendRpc("get_available_models")) as RpcCallResult & {
+						data?: { models?: Array<{ provider: string; id: string; name: string }> };
+					};
+					const models = result.success ? (result.data?.models ?? []) : [];
+					if (models.length === 0) {
+						await reply("Could not retrieve model list.");
+						return;
+					}
+					const list = models
+						.map((m) => `• ${m.provider}/${m.id} — ${m.name}`)
+						.join("\n");
+					await reply(
+						`Available models:\n${list}\n\nUse \`/model provider/id\` to switch.`,
+					);
+				} catch (err) {
+					logger.error("[gateway] Failed to list models:", err);
+					await reply("Failed to retrieve model list.");
+				}
+				return;
+			}
+
+			// Bare Model-ID ohne Provider: über get_available_models auflösen
+			// (eindeutiger Match nötig, sonst ehrliche Fehlermeldung).
+			let provider = target.provider;
+			let modelId = target.modelId;
+			if (provider === null) {
+				const matches = await listAvailableModels();
+				const found = matches.filter(
+					(m) => m.id.toLowerCase() === modelId.toLowerCase(),
+				);
+				if (found.length !== 1) {
+					await reply(
+						`❌ Unknown model "${modelId}". Use \`/model provider/modelId\` — \`/model list\` shows available models.`,
+					);
+					return;
+				}
+				provider = found[0].provider;
+				modelId = found[0].id;
+			}
+
+			try {
+				const result = (await sendRpc("set_model", { provider, modelId })) as
+					RpcCallResult & { data?: { name?: string } };
+				if (result.success) {
+					const name = result.data?.name || `${provider}/${modelId}`;
+					await reply(`✅ Model changed to ${name}`);
+					logger.info(
+						`[gateway] Admin ${message.userId} switched model to ${provider}/${modelId}`,
+					);
+				} else {
+					await reply(`❌ Failed: ${result.error || "unknown"}`);
+				}
+			} catch (err) {
+				logger.error("[gateway] Failed to change model:", err);
+				await reply("Failed to change model.");
+			}
+			return;
+		}
+	}
+}
+
+/** Modelle aus dem pi-RPC (leeres Array bei Fehler — Aufrufer meldet ehrlich). */
+async function listAvailableModels(): Promise<Array<{ provider: string; id: string; name: string }>> {
+	try {
+		const result = (await sendRpc("get_available_models")) as RpcCallResult & {
+			data?: { models?: Array<{ provider: string; id: string; name: string }> };
+		};
+		return result.success ? (result.data?.models ?? []) : [];
+	} catch (err) {
+		logger.warn("[gateway] get_available_models failed:", err);
+		return [];
+	}
 }

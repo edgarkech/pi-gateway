@@ -315,21 +315,21 @@ describe("isPublishable (D4 Anti-Loop-Core)", () => {
 		).toBe(false);
 	});
 
-	it('akzeptiert gelistete Bots wie Menschen (allowedBots, 2026-09-20 Festzurrung)', () => {
+	it("akzeptiert gelistete Bots wie Menschen (allowedBots, 2026-09-20 Festzurrung)", () => {
 		const cfg = testConfig({ allowedBots: ["bot-pepe"] });
-		expect(
-			isPublishable(cfg, talkMessage({ actorType: "bots", actorId: "bot-pepe" })),
-		).toBe(true);
+		expect(isPublishable(cfg, talkMessage({ actorType: "bots", actorId: "bot-pepe" }))).toBe(
+			true,
+		);
 	});
 
-	it('verwirft fremde Bots trotz vorhandener Allowlist', () => {
+	it("verwirft fremde Bots trotz vorhandener Allowlist", () => {
 		const cfg = testConfig({ allowedBots: ["bot-pepe"] });
-		expect(
-			isPublishable(cfg, talkMessage({ actorType: "bots", actorId: "bot-other" })),
-		).toBe(false);
+		expect(isPublishable(cfg, talkMessage({ actorType: "bots", actorId: "bot-other" }))).toBe(
+			false,
+		);
 	});
 
-	it('filtert Bots ohne Allowlist-Konfiguration wie bisher (Default [])', () => {
+	it("filtert Bots ohne Allowlist-Konfiguration wie bisher (Default [])", () => {
 		expect(
 			isPublishable(testConfig(), talkMessage({ actorType: "bots", actorId: "bot-pepe" })),
 		).toBe(false);

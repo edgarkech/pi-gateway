@@ -2,7 +2,7 @@
 
 Multi-platform chat bridge for pi — connect your AI agent to Discord, Telegram, Slack, WhatsApp, Nextcloud Talk, WebSocket, and the web. Real-time streaming, per-chat sessions, role-based access control, and a hardened security layer.
 
-> Fork of [0xKobold/pi-gateway](https://github.com/0xKobold/pi-gateway), carried forward through [gamalan/pi-gateway](https://github.com/gamalan/pi-gateway) and refactored into a modular architecture with config-based UID allowlisting, a pairing flow, and per-user/per-platform rate limiting. See [LICENSE](LICENSE) for the copyright chain.
+> Fork of [0xKobold/pi-gateway](https://github.com/0xKobold/pi-gateway), carried forward through [gamalan/pi-gateway](https://github.com/gamalan/pi-gateway) and refactored into a modular architecture with config-based UID allowlisting, a pairing flow, and per-user rate limiting. See [LICENSE](LICENSE) for the copyright chain.
 
 ## Architecture
 
@@ -48,9 +48,10 @@ Key design principles:
 - **Nextcloud Talk without a public URL** — OCS user-polling (long-poll first, interval fallback) with persistent per-room watermarks, backoff/circuit-breaker, and a two-layer anti-loop filter so the bot never answers itself
 - **File attachments** — inbound media (images, documents) from Telegram/Nextcloud Talk via magic-byte validation, local storage with TTL cleanup, and prompt manifests (+ base64 image inlining)
 - **Real-time streaming** — responses appear token-by-token via live message editing
+- **Channel slash commands** — curated set (`/stop`, `/new`, `/status`, `/model`) usable directly in the chat, admin-only and room-type-gated (1:1 / human groups / bot groups), central text-level parsing without native platform registries (`docs/slash-commands.md`)
 - **Per-chat sessions** — isolated conversations with configurable reset policies (daily / idle)
 - **Background tasks** — spawn async work from chats, results delivered when ready
-- **Security layer** — allowlists, admin roles, pairing flow, per-user/platform rate limiting, configurable tool policies
+- **Security layer** — allowlists, admin roles, pairing flow, per-user rate limiting, configurable tool policies
 - **Detached daemon mode** — `/gateway start -d` or `pi-gateway start -d` keeps the gateway alive after pi closes
 - **HTTP + WebSocket API** — connect external clients, send prompts, receive streaming responses
 - **pi-native** — runs as a pi extension with `/gateway` slash commands and registered tools
@@ -64,9 +65,17 @@ Requires pi coding agent (`@earendil-works/pi-coding-agent >= 0.80.3`) and `@sin
 ```bash
 git clone https://github.com/edgarkech/pi-gateway.git
 cd pi-gateway
-npm install
+npm install --force
 ./scripts/deploy.sh install --seed-config --with-service
 ```
+
+> **Note (npm ≥ 10.9):** plain `npm install` can abort with the arborist error
+> `Cannot read properties of null (reading 'edgesOut')` — a peer-dependency tree
+> bug in npm itself (triggered by the vitest 4 peer set). Workaround:
+> `npm install --force`. Without it, the peer dependencies
+> (`@earendil-works/pi-coding-agent`, `@sinclair/typebox`) are not installed and
+> `npm run build` fails with TS2307. The committed `package-lock.json` keeps the
+> runtime's `npm ci` reproducible.
 
 **Manual (equivalent to the script):**
 
@@ -166,6 +175,9 @@ Configuration lives at `~/.pi/gateway/config.json`. On first run the gateway aut
       "userId": "bot-account",               // Nextcloud login of the bot account
       "appToken": "…",             // app password (NOT the main account password)
       "rooms": ["room-token-1234"],           // Talk room tokens (explicit, MVP)
+      "roomTypes": {                          // slash-command room classification (docs/slash-commands.md)
+        "room-token-5678": "groupBot"         // "groupHuman" (default) | "groupBot"; unclassified groups → groupHuman
+      },
       "pollMode": "long-poll",                // "long-poll" | "interval"
       "longPollTimeoutSeconds": 30,
       "minPollIntervalMs": 1000,
@@ -204,7 +216,7 @@ The security layer (`src/security/`) enforces, in order, rate limiting, the allo
 
 ### Rate Limiting
 
-Per-user **and** per-platform. When a user exceeds `security.rateLimit.maxRequests` within `security.rateLimit.windowMs`, further messages are blocked with a "too quickly" notice. Configured via the `security.rateLimit` block in `config.json` (defaults: 60 requests / 60000 ms).
+Per-user (keyed by `platform:userId`). When a user exceeds `security.rateLimit.maxRequests` within `security.rateLimit.windowMs`, further messages are blocked with a "too quickly" notice. Configured via the `security.rateLimit` block in `config.json` (defaults: 60 requests / 60000 ms).
 
 ### Allowlist (DB)
 
@@ -333,6 +345,24 @@ By default, external users are **restricted to read-only tools** when their mess
 
 ## Commands
 
+### Channel slash commands (in the chat, NC-Talk-first)
+
+A small curated set of commands usable directly in the chat — **admin-only** and gated by room type (`docs/slash-commands.md` for the full spec):
+
+| Command | What it does | 1:1 | Human group | Bot group |
+|---------|--------------|-----|-------------|-----------|
+| `/stop` | Abort the current generation (session kept) | ✅ | ✅ | — |
+| `/new` | Reset the session for this room | ✅ | — | — |
+| `/status` | Health report: agent, adapters, active model, context usage | ✅ | ✅ | — |
+| `/model` | Show current model; with argument: switch (or `list`) | ✅ | — | — |
+
+Behavior outside the matrix:
+- **Bot groups** (`roomTypes: "groupBot"`): no commands are processed — the text is forwarded to the agent as a normal message, without any acknowledgement (any output would be an event for the other bots).
+- **Non-admin users:** the command is not forwarded to the agent; the user gets a short acknowledgement (`⚠️ This command requires admin privileges.`).
+- Room classification is **configuration-driven** (`platforms.nextcloudTalk.roomTypes`); unclassified groups default to `groupHuman`. Changes apply on config reload without a restart.
+
+### TUI commands (inside pi)
+
 | Command | Description |
 |---------|-------------|
 | `/gateway start [port]` | Start the gateway |
@@ -417,8 +447,9 @@ Status (details in [`ROADMAP.md`](ROADMAP.md)):
 - ✅ **Phase 2 (Cleanup)** — security hardening, TypeScript strict mode, Vitest suite, linting/formatting.
 - ✅ **Phase 3 (Input Expansion)** — media/file-attachment support (`media/` module: ingest, magic-byte validation, TTL cleanup; integrated into Telegram and Nextcloud Talk).
 - ✅ **Phase 4 (Nextcloud Talk)** — OCS user-polling adapter complete: long-poll with interval fallback, persistent watermarks, anti-loop filter, read markers, room discovery, WebDAV media inbound; validated against a real Nextcloud 33 instance end-to-end.
+- ✅ **Channel slash commands** — `/stop`, `/new`, `/status`, `/model` with config-driven room classification and admin + room-type gating (`docs/slash-commands.md`); live verification on a production NC-Talk room pending.
 - 🔵 **Nextcloud Talk file sharing** — the real client-side file share format has not yet been verified against a production Nextcloud client (covered by mock/E2E harness so far).
-- 🔵 **Slack Inbound** (receiving messages from Slack, as opposed to only outbound) — planned for a later phase.
+- ⏸️ **Slack Inbound** (receiving messages from Slack, as opposed to only outbound) — deferred, no current priority.
 
 There is currently **no Twitch adapter**; it was removed during the Phase 2 cleanup and is not a supported platform.
 
