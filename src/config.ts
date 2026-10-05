@@ -73,6 +73,9 @@ const DEFAULT_CONFIG: GatewayConfig = {
 			autoDiscoverRooms: false,
 			roomRefreshIntervalMs: 60_000,
 			allowInsecureHttp: false,
+			// Slash Commands (docs/slash-commands.md §2): leere Map = alle
+			// Gruppenräume konservativ `groupHuman`; DMs implizit ohne Eintrag.
+			roomTypes: {},
 			// Default = media.maxAttachmentsPerMessage (inheritance is applied
 			// in mergeGatewayConfig when the user does not set it explicitly).
 			maxAttachmentsPerMessage: 4,
@@ -391,6 +394,34 @@ function mergeGatewayConfig(value: unknown): GatewayConfig {
 		talkIntMin("maxConcurrentPolls", talk.maxConcurrentPolls, 1);
 		talkIntMin("circuitThreshold", talk.circuitThreshold, 1);
 		talkIntMin("maxAttachmentsPerMessage", talk.maxAttachmentsPerMessage, 1);
+		// Slash Commands (docs/slash-commands.md §2): `roomTypes` ist eine Map
+		// Raum-Token → "groupHuman" | "groupBot". Konfigurations-getrieben,
+		// keine Auto-Erkennung; unklassifizierte Gruppenräume bleiben beim
+		// konservativen Default groupHuman (zur Auflösung siehe
+		// src/core/channel-commands.ts → resolveRoomType).
+		if (talk.roomTypes !== undefined) {
+			if (
+				talk.roomTypes === null ||
+				typeof talk.roomTypes !== "object" ||
+				Array.isArray(talk.roomTypes)
+			) {
+				throw new Error(
+					"config.platforms.nextcloudTalk.roomTypes must be an object mapping room tokens to room types",
+				);
+			}
+			for (const [roomId, roomType] of Object.entries(talk.roomTypes)) {
+				if (roomId.trim() === "") {
+					throw new Error(
+						"config.platforms.nextcloudTalk.roomTypes contains an empty room token key",
+					);
+				}
+				if (roomType !== "groupHuman" && roomType !== "groupBot") {
+					throw new Error(
+						`config.platforms.nextcloudTalk.roomTypes["${roomId}"] must be "groupHuman" or "groupBot", got "${String(roomType)}"`,
+					);
+				}
+			}
+		}
 	}
 	return merged;
 }

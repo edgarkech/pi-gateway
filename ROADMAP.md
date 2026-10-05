@@ -54,7 +54,8 @@ A robust, modular channel adapter for the pi coding agent — reliable communica
 
 ## 🎬 Next Up
 
-- [ ] **Slash commands over channels** — the next major feature; **specify first, implement second**. Current state: the anti-loop filter drops Talk slash-commands (`messageType=command`); gateway meta-commands run as plain text messages. Open spec questions: command syntax per platform, permission model (admin vs. regular user), interaction with the tool-policy layer, and how `/gateway` meta-commands map onto native platform slash-command registries.
+- [x] **Slash commands over channels** — specified (`docs/slash-commands.md`) and implemented (2026-10-05): curated set `/stop`, `/new`, `/status`, `/model` with config-driven room classification (`roomTypes`: `groupHuman`/`groupBot`), admin-only + room-type gating, central text-level parsing (no native platform registries), Talk anti-loop filter opened selectively for the known set. Live verification against a production NC-Talk room pending (deployment on igor).
+- [ ] **Live verification of slash commands** — configure `roomTypes` in the production config and exercise all four commands per room type on NC Talk (1:1, groupHuman, groupBot incl. forwarding behavior).
 
 ---
 
@@ -62,7 +63,7 @@ A robust, modular channel adapter for the pi coding agent — reliable communica
 
 - [ ] **Nextcloud Talk file sharing with a real client** — the client-side file share format is covered by mock/E2E harness so far; verify against a production Nextcloud client.
 - [ ] **Session-per-Room live verification** — implemented and tested (mock level); verify with a live message series à la QED-Test (3 rooms, overlapping → 3 pi session files, no rejections), then enable `sessions.perRoom` in production config.
-- [ ] **No streaming in bot groups** — in group chats where other (allowed) bots are present, streaming edits (`editMessage` on the "⏳ Thinking…" placeholder) should be disabled: every edit is a new room event and can trigger the other bots. Decide on a per-room/per-group switch (e.g. via `groupRooms` labels) and send the final message in one piece instead.
+- [ ] **No streaming in bot groups** — in group chats where other (allowed) bots are present, streaming edits (`editMessage` on the "⏳ Thinking…" placeholder) should be disabled: every edit is a new room event and can trigger the other bots. The per-room switch is now trivial: the `roomTypes` classification from the slash-commands feature (`docs/slash-commands.md`, §2) already marks `groupBot` rooms — wire the streaming disable to it and send the final message in one piece.
 - [ ] **Telegram offset not persisted** — the long-poll offset lives in memory only. Two effects: (1) within a run, a failed `handleUpdate` loses the message (at-most-once); (2) after a gateway restart, Telegram re-delivers unacknowledged updates (~24 h window) and the pipeline has no dedup by `message_id` → the same message can be processed twice. Mitigation: persist the offset (e.g. in the sessions DB) and/or dedup recent `message_id`s.
 - [ ] **HTML/markdown formatting mismatch** (issue #1) — channel meta-messages use markdown-style markup (`*bold*`, backticks) but the Telegram adapter sends with `parse_mode: HTML`, so the markers render literally. Align formatting conventions across pipeline messages and adapters.
 - [ ] **TUI status flapping** — cosmetic flicker of the status footer in idle mode (RPC timing); generation counter exists, test invariant missing.
@@ -77,4 +78,4 @@ A robust, modular channel adapter for the pi coding agent — reliable communica
 
 ---
 
-*Last updated: 2026-10-04*
+*Last updated: 2026-10-05*
