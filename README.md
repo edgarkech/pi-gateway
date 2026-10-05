@@ -48,6 +48,7 @@ Key design principles:
 - **Nextcloud Talk without a public URL** — OCS user-polling (long-poll first, interval fallback) with persistent per-room watermarks, backoff/circuit-breaker, and a two-layer anti-loop filter so the bot never answers itself
 - **File attachments** — inbound media (images, documents) from Telegram/Nextcloud Talk via magic-byte validation, local storage with TTL cleanup, and prompt manifests (+ base64 image inlining)
 - **Real-time streaming** — responses appear token-by-token via live message editing
+- **Channel slash commands** — curated set (`/stop`, `/new`, `/status`, `/model`) usable directly in the chat, admin-only and room-type-gated (1:1 / human groups / bot groups), central text-level parsing without native platform registries (`docs/slash-commands.md`)
 - **Per-chat sessions** — isolated conversations with configurable reset policies (daily / idle)
 - **Background tasks** — spawn async work from chats, results delivered when ready
 - **Security layer** — allowlists, admin roles, pairing flow, per-user rate limiting, configurable tool policies
@@ -174,6 +175,9 @@ Configuration lives at `~/.pi/gateway/config.json`. On first run the gateway aut
       "userId": "bot-account",               // Nextcloud login of the bot account
       "appToken": "…",             // app password (NOT the main account password)
       "rooms": ["room-token-1234"],           // Talk room tokens (explicit, MVP)
+      "roomTypes": {                          // slash-command room classification (docs/slash-commands.md)
+        "room-token-5678": "groupBot"         // "groupHuman" (default) | "groupBot"; unclassified groups → groupHuman
+      },
       "pollMode": "long-poll",                // "long-poll" | "interval"
       "longPollTimeoutSeconds": 30,
       "minPollIntervalMs": 1000,
@@ -341,6 +345,24 @@ By default, external users are **restricted to read-only tools** when their mess
 
 ## Commands
 
+### Channel slash commands (in the chat, NC-Talk-first)
+
+A small curated set of commands usable directly in the chat — **admin-only** and gated by room type (`docs/slash-commands.md` for the full spec):
+
+| Command | What it does | 1:1 | Human group | Bot group |
+|---------|--------------|-----|-------------|-----------|
+| `/stop` | Abort the current generation (session kept) | ✅ | ✅ | — |
+| `/new` | Reset the session for this room | ✅ | — | — |
+| `/status` | Health report: agent, adapters, active model, context usage | ✅ | ✅ | — |
+| `/model` | Show current model; with argument: switch (or `list`) | ✅ | — | — |
+
+Behavior outside the matrix:
+- **Bot groups** (`roomTypes: "groupBot"`): no commands are processed — the text is forwarded to the agent as a normal message, without any acknowledgement (any output would be an event for the other bots).
+- **Non-admin users:** the command is not forwarded to the agent; the user gets a short acknowledgement (`⚠️ This command requires admin privileges.`).
+- Room classification is **configuration-driven** (`platforms.nextcloudTalk.roomTypes`); unclassified groups default to `groupHuman`. Changes apply on config reload without a restart.
+
+### TUI commands (inside pi)
+
 | Command | Description |
 |---------|-------------|
 | `/gateway start [port]` | Start the gateway |
@@ -425,8 +447,9 @@ Status (details in [`ROADMAP.md`](ROADMAP.md)):
 - ✅ **Phase 2 (Cleanup)** — security hardening, TypeScript strict mode, Vitest suite, linting/formatting.
 - ✅ **Phase 3 (Input Expansion)** — media/file-attachment support (`media/` module: ingest, magic-byte validation, TTL cleanup; integrated into Telegram and Nextcloud Talk).
 - ✅ **Phase 4 (Nextcloud Talk)** — OCS user-polling adapter complete: long-poll with interval fallback, persistent watermarks, anti-loop filter, read markers, room discovery, WebDAV media inbound; validated against a real Nextcloud 33 instance end-to-end.
+- ✅ **Channel slash commands** — `/stop`, `/new`, `/status`, `/model` with config-driven room classification and admin + room-type gating (`docs/slash-commands.md`); live verification on a production NC-Talk room pending.
 - 🔵 **Nextcloud Talk file sharing** — the real client-side file share format has not yet been verified against a production Nextcloud client (covered by mock/E2E harness so far).
-- 🔵 **Slack Inbound** (receiving messages from Slack, as opposed to only outbound) — planned for a later phase.
+- ⏸️ **Slack Inbound** (receiving messages from Slack, as opposed to only outbound) — deferred, no current priority.
 
 There is currently **no Twitch adapter**; it was removed during the Phase 2 cleanup and is not a supported platform.
 
